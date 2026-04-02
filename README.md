@@ -88,6 +88,34 @@ required = ruta
 
 ## Activar autocompletado en Bash
 
+### Automatico (recomendado)
+
+Desde el directorio del proyecto (con Python disponible):
+
+```bash
+python launcher.py --install-bash-completion
+```
+
+Esto añade un bloque marcado a tu `~/.bashrc` (alias `launcher`, `source` del venv si existe, y `launcher-completion.bash`). Para otro fichero:
+
+```bash
+python launcher.py --install-bash-completion --bashrc ~/.profile
+```
+
+Para quitar el bloque:
+
+```bash
+python launcher.py --uninstall-bash-completion
+```
+
+Luego en Git Bash:
+
+```bash
+source ~/.bashrc
+```
+
+### Manual
+
 Define un alias o funcion para llamar al launcher como `launcher`:
 
 ```bash

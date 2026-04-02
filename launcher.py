@@ -17,6 +17,86 @@ DEFAULT_CONFIG = Path(__file__).with_name("commands.ini")
 DEFAULT_HISTORY = Path(__file__).with_name(".launcher_history")
 ALLOWED_MODES = {"shell", "open", "browser"}
 
+BASHRC_BLOCK_START = "# <<< miniLauncher2 bash completion >>>"
+BASHRC_BLOCK_END = "# <<< end miniLauncher2 bash completion >>>"
+
+
+def path_for_bash(path: Path) -> str:
+    """Ruta absoluta usable en Git Bash / MSYS (Windows: C:\\foo -> /c/foo)."""
+    p = path.resolve()
+    if sys.platform == "win32":
+        s = str(p)
+        if len(s) >= 2 and s[1] == ":":
+            drive = s[0].lower()
+            rest = s[2:].replace("\\", "/")
+            return f"/{drive}{rest}"
+    return str(p).replace("\\", "/")
+
+
+def bashrc_block_content(project_dir: Path) -> str:
+    launcher_py = project_dir / "launcher.py"
+    completion_bash = project_dir / "launcher-completion.bash"
+    venv_activate = project_dir / ".venv" / "Scripts" / "activate"
+    lp = path_for_bash(launcher_py)
+    cb = path_for_bash(completion_bash)
+    va = path_for_bash(venv_activate)
+    lines = [
+        BASHRC_BLOCK_START,
+        f'if [ -f "{va}" ]; then',
+        f'  source "{va}"',
+        "fi",
+        f"alias launcher='python \"{lp}\"'",
+        f'if [ -f "{cb}" ]; then',
+        f'  source "{cb}"',
+        "fi",
+        BASHRC_BLOCK_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def install_bashrc(bashrc_path: Path) -> int:
+    bashrc_path = bashrc_path.expanduser()
+    block = bashrc_block_content(Path(__file__).resolve().parent)
+    existing = ""
+    if bashrc_path.exists():
+        existing = bashrc_path.read_text(encoding="utf-8")
+    if BASHRC_BLOCK_START in existing:
+        click.echo(f"Ya estaba registrado en: {bashrc_path}")
+        return 0
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    bashrc_path.parent.mkdir(parents=True, exist_ok=True)
+    bashrc_path.write_text(existing + block, encoding="utf-8")
+    click.echo(f"Autocompletado Bash registrado en: {bashrc_path}")
+    click.echo("Ejecuta: source ~/.bashrc   (o abre una nueva terminal Git Bash)")
+    return 0
+
+
+def uninstall_bashrc(bashrc_path: Path) -> int:
+    bashrc_path = bashrc_path.expanduser()
+    if not bashrc_path.exists():
+        click.echo(f"No existe: {bashrc_path}", err=True)
+        return 1
+    text = bashrc_path.read_text(encoding="utf-8")
+    if BASHRC_BLOCK_START not in text:
+        click.echo(f"No hay bloque miniLauncher2 en: {bashrc_path}", err=True)
+        return 1
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    skip = False
+    for line in lines:
+        if BASHRC_BLOCK_START in line:
+            skip = True
+            continue
+        if skip and BASHRC_BLOCK_END in line:
+            skip = False
+            continue
+        if not skip:
+            out.append(line)
+    bashrc_path.write_text("".join(out), encoding="utf-8")
+    click.echo(f"Bloque miniLauncher2 eliminado de: {bashrc_path}")
+    return 0
+
 
 def load_config(config_path: Path) -> dict:
     if not config_path.exists():
@@ -302,8 +382,42 @@ def run_interactive_shell(cfg: dict) -> int:
 )
 @click.option("--list", "list_commands", is_flag=True, help="Lista comandos disponibles")
 @click.option("--complete", is_flag=True, hidden=True)
-def main(command: str | None, params: tuple[str, ...], config: str, list_commands: bool, complete: bool) -> None:
+@click.option(
+    "--install-bash-completion",
+    is_flag=True,
+    help="Añade al ~/.bashrc el alias y el script de autocompletado (Git Bash)",
+)
+@click.option(
+    "--uninstall-bash-completion",
+    is_flag=True,
+    help="Elimina del ~/.bashrc el bloque añadido por --install-bash-completion",
+)
+@click.option(
+    "--bashrc",
+    default="~/.bashrc",
+    show_default=True,
+    help="Fichero bashrc a modificar (por defecto ~/.bashrc)",
+)
+def main(
+    command: str | None,
+    params: tuple[str, ...],
+    config: str,
+    list_commands: bool,
+    complete: bool,
+    install_bash_completion: bool,
+    uninstall_bash_completion: bool,
+    bashrc: str,
+) -> None:
     """Launcher CLI configurable."""
+    if install_bash_completion and uninstall_bash_completion:
+        raise click.ClickException("Usa solo una de: --install-bash-completion o --uninstall-bash-completion")
+
+    if install_bash_completion:
+        raise SystemExit(install_bashrc(Path(bashrc)))
+
+    if uninstall_bash_completion:
+        raise SystemExit(uninstall_bashrc(Path(bashrc)))
+
     try:
         cfg = load_config(Path(config))
     except (FileNotFoundError, ValueError) as exc:
