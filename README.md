@@ -1,12 +1,21 @@
 # miniLauncher2
 
-## Qué es y cómo se usa
+**Tu propio launcher de terminal, sin escribir scripts a cada ruta.**
 
-Herramienta de línea de órdenes en Python: los comandos se definen en `commands.ini` (plantillas, parámetros `--nombre valor`). Sirve para lanzar acciones, abrir URLs o ficheros según comandos que tú mismo configuras.
+Define comandos en un fichero de configuración, ejecútalos con opciones al estilo `--param valor`, y usa **Tab** donde quieras: Bash, PowerShell o la shell interactiva incluida. Ideal para acortar tareas repetitivas (despliegues, abrir URLs, lanzar herramientas) con una interfaz coherente.
 
-Minilauncher permite que esos comandos inventados por ti tengan autocompletado en bash, en powershell, o en el propio minilauncher (tiene modo shell)
+---
 
-**Ejemplos** (con el entorno ya instalado y activado):
+## Qué ofrece
+
+| | |
+|--|--|
+| **Configuración clara** | Comandos y plantillas en `commands.ini` — sin recompilar nada. |
+| **Varios modos** | Ejecutar en shell, abrir en el navegador o con la app por defecto del sistema. |
+| **Autocompletado** | Misma lógica para Git Bash, PowerShell y el modo interactivo (`prompt_toolkit`). |
+| **Shell propia** | `mini-launcher` sin argumentos → prompt `l>`, historial persistente, salida con `q`. |
+
+**Ejemplos** (tras instalar y activar el entorno virtual):
 
 ```text
 mini-launcher --list
@@ -14,24 +23,42 @@ mini-launcher deploy --env dev --version 1.0
 mini-launcher
 ```
 
-Sin argumentos entra en una shell interactiva; dentro: `list`, `help`, `q` para salir.
+La última línea abre la shell interactiva; dentro: `list`, `help`; `q` o `exit` para salir.
+
+### Cómo se ve el autocompletado (simulación)
+
+No hace falta grabar un vídeo: en la shell interactiva (`mini-launcher` sin argumentos) el **Tab** va rellenando por pasos lo que definiste en `commands.ini`. El símbolo **█** marca dónde está el cursor:
+
+```
+ ╭─ miniLauncher · shell interactiva ─────────────────╮
+ │ l> dep█                                            │
+ │      └─ Tab → completa el nombre del comando       │
+ │ l> deploy █                                        │
+ │      └─ Tab → ofrece --env=  --version=  …         │
+ │ l> deploy --env█                                   │
+ │      └─ Tab → si hay choices: dev, staging, prod … │
+ │ l> deploy --env=dev --version=1.0█                 │
+ ╰────────────────────────────────────────────────────╯
+```
+
+Misma idea en **Git Bash** o **PowerShell** (después de `--install-bash-completion` / `--install-powershell-completion`): escribes `l deploy ...` o `mini-launcher deploy ...` y Tab recorre comandos y opciones al mismo estilo.
+
+**Grabación real (GIF o asciinema):** pasos en [docs/grabar-demo.md](docs/grabar-demo.md).
 
 ---
 
-## Instalación desde cero
+## Instalación en cuatro pasos
 
-1. Instala **Python 3.10+** y clona o descarga este proyecto.
+1. **Python 3.10+** instalado; clona o descarga este repositorio.
 
-2. En la carpeta del proyecto:
-
-   - **Windows (PowerShell):** `.\install.ps1`
+2. Desde la raíz del proyecto:
+   - **Windows:** `.\install.ps1`
    - **Linux / macOS:** `chmod +x install.sh && ./install.sh`
 
-3. Activa el entorno virtual:
-
+3. **Activa el virtualenv**
    - PowerShell: `.\.venv\Scripts\Activate.ps1`
    - Bash: `source .venv/bin/activate`
 
-4. Comprueba: `mini-launcher --list`
+4. **Prueba:** `mini-launcher --list`
 
-**Opcional — autocompletado con Tab:** `mini-launcher --install-bash-completion` (Git Bash) o `mini-launcher --install-powershell-completion` (PowerShell); luego recarga la terminal o el perfil.
+**Opcional:** autocompletado con Tab — `mini-launcher --install-bash-completion` (Git Bash) o `mini-launcher --install-powershell-completion`; después recarga la terminal o ejecuta `. $PROFILE` en PowerShell.
