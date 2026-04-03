@@ -62,3 +62,12 @@ Misma idea en **Git Bash** o **PowerShell** (después de `--install-bash-complet
 4. **Prueba:** `mini-launcher --list`
 
 **Opcional:** autocompletado con Tab — `mini-launcher --install-bash-completion` (Git Bash) o `mini-launcher --install-powershell-completion`; después recarga la terminal o ejecuta `. $PROFILE` en PowerShell.
+
+---
+
+## Documentación
+
+| Recurso | Contenido |
+|---------|-----------|
+| [docs/configuracion-ini.md](docs/configuracion-ini.md) | Referencia completa del fichero INI: `template`, `mode`, `params`, `required`, `*.choices`, `*.path`, sustitución y validación. |
+| [docs/grabar-demo.md](docs/grabar-demo.md) | Cómo grabar un GIF o un cast de asciinema para el README. |
