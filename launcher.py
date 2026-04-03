@@ -37,6 +37,9 @@ def split_cli_line(line: str) -> list[str]:
 BASHRC_BLOCK_START = "# <<< miniLauncher2 bash completion >>>"
 BASHRC_BLOCK_END = "# <<< end miniLauncher2 bash completion >>>"
 
+POWERSHELL_BLOCK_START = "# <<< miniLauncher2 PowerShell completion >>>"
+POWERSHELL_BLOCK_END = "# <<< end miniLauncher2 PowerShell completion >>>"
+
 
 def path_for_bash(path: Path) -> str:
     """Ruta absoluta usable en Git Bash / MSYS (Windows: C:\\foo -> /c/foo)."""
@@ -123,6 +126,92 @@ def uninstall_bashrc(bashrc_path: Path) -> int:
             out.append(line)
     bashrc_path.write_text("".join(out), encoding="utf-8")
     click.echo(f"Bloque miniLauncher2 eliminado de: {bashrc_path}")
+    return 0
+
+
+def default_powershell_profile_path() -> Path:
+    """Ruta tipica del perfil de PowerShell 6+ (Windows)."""
+    return Path.home() / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+
+
+def ps_single_quoted(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def powershell_profile_block_content(project_dir: Path) -> str:
+    project_dir = project_dir.resolve()
+    venv_py = project_dir / ".venv" / "Scripts" / "python.exe"
+    if venv_py.exists():
+        py = str(venv_py)
+    else:
+        py = sys.executable
+    launcher_py = str((project_dir / "launcher.py").resolve())
+    py_q = ps_single_quoted(py)
+    lp_q = ps_single_quoted(launcher_py)
+    lines = [
+        POWERSHELL_BLOCK_START,
+        f"$MiniLauncherPython = {py_q}",
+        f"$MiniLauncherScript = {lp_q}",
+        "$MiniLauncherCompletionBlock = {",
+        "    param(",
+        "        [string]$wordToComplete,",
+        "        [System.Management.Automation.Language.Ast]$commandAst,",
+        "        [int]$cursorPosition",
+        "    )",
+        "    $line = $commandAst.Extent.Text",
+        "    if ($null -eq $line) { return }",
+        "    $env:COMP_LINE = $line",
+        "    $env:COMP_POINT = [string]$cursorPosition",
+        "    & $MiniLauncherPython $MiniLauncherScript --complete 2>$null | ForEach-Object { $_ }",
+        "}.GetNewClosure()",
+        "Register-ArgumentCompleter -Native -CommandName 'mini-launcher' -ScriptBlock $MiniLauncherCompletionBlock",
+        "Register-ArgumentCompleter -Native -CommandName 'l' -ScriptBlock $MiniLauncherCompletionBlock",
+        POWERSHELL_BLOCK_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def install_powershell_profile(profile_path: Path) -> int:
+    profile_path = profile_path.expanduser()
+    block = powershell_profile_block_content(Path(__file__).resolve().parent)
+    existing = ""
+    if profile_path.exists():
+        existing = profile_path.read_text(encoding="utf-8")
+    if POWERSHELL_BLOCK_START in existing:
+        click.echo(f"Ya estaba registrado en: {profile_path}")
+        return 0
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(existing + block, encoding="utf-8")
+    click.echo(f"Autocompletado PowerShell registrado en: {profile_path}")
+    click.echo("Cierra y abre PowerShell o ejecuta: . $PROFILE")
+    return 0
+
+
+def uninstall_powershell_profile(profile_path: Path) -> int:
+    profile_path = profile_path.expanduser()
+    if not profile_path.exists():
+        click.echo(f"No existe: {profile_path}", err=True)
+        return 1
+    text = profile_path.read_text(encoding="utf-8")
+    if POWERSHELL_BLOCK_START not in text:
+        click.echo(f"No hay bloque miniLauncher2 en: {profile_path}", err=True)
+        return 1
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    skip = False
+    for line in lines:
+        if POWERSHELL_BLOCK_START in line:
+            skip = True
+            continue
+        if skip and POWERSHELL_BLOCK_END in line:
+            skip = False
+            continue
+        if not skip:
+            out.append(line)
+    profile_path.write_text("".join(out), encoding="utf-8")
+    click.echo(f"Bloque miniLauncher2 eliminado de: {profile_path}")
     return 0
 
 
@@ -579,6 +668,22 @@ def run_interactive_shell(cfg: dict) -> int:
     show_default=True,
     help="Fichero bashrc a modificar (por defecto ~/.bashrc)",
 )
+@click.option(
+    "--install-powershell-completion",
+    is_flag=True,
+    help="Añade al perfil de PowerShell el autocompletado nativo (Tab)",
+)
+@click.option(
+    "--uninstall-powershell-completion",
+    is_flag=True,
+    help="Elimina del perfil de PowerShell el bloque instalado",
+)
+@click.option(
+    "--powershell-profile",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Ruta al perfil de PowerShell (por defecto Documents/PowerShell/Microsoft.PowerShell_profile.ps1)",
+)
 def main(
     command: str | None,
     params: tuple[str, ...],
@@ -588,16 +693,44 @@ def main(
     install_bash_completion: bool,
     uninstall_bash_completion: bool,
     bashrc: str,
+    install_powershell_completion: bool,
+    uninstall_powershell_completion: bool,
+    powershell_profile: Path | None,
 ) -> None:
     """Launcher CLI configurable."""
     if install_bash_completion and uninstall_bash_completion:
         raise click.ClickException("Usa solo una de: --install-bash-completion o --uninstall-bash-completion")
+    if install_powershell_completion and uninstall_powershell_completion:
+        raise click.ClickException(
+            "Usa solo una de: --install-powershell-completion o --uninstall-powershell-completion"
+        )
 
     if install_bash_completion:
-        raise SystemExit(install_bashrc(Path(bashrc)))
-
+        code = install_bashrc(Path(bashrc))
+        if code != 0:
+            raise SystemExit(code)
     if uninstall_bash_completion:
-        raise SystemExit(uninstall_bashrc(Path(bashrc)))
+        code = uninstall_bashrc(Path(bashrc))
+        if code != 0:
+            raise SystemExit(code)
+
+    ps_path = powershell_profile if powershell_profile is not None else default_powershell_profile_path()
+    if install_powershell_completion:
+        code = install_powershell_profile(ps_path)
+        if code != 0:
+            raise SystemExit(code)
+    if uninstall_powershell_completion:
+        code = uninstall_powershell_profile(ps_path)
+        if code != 0:
+            raise SystemExit(code)
+
+    if (
+        install_bash_completion
+        or uninstall_bash_completion
+        or install_powershell_completion
+        or uninstall_powershell_completion
+    ):
+        return
 
     try:
         cfg = load_config(Path(config))

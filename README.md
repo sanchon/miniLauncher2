@@ -1,225 +1,37 @@
 # miniLauncher2
 
-Launcher de linea de comandos en Python con:
+## Qué es y cómo se usa
 
-- comandos definidos en archivo de configuracion (`commands.ini`)
-- ejecucion por plantilla (`template`)
-- autocompletado en Bash para comandos y parametros
+Herramienta de línea de órdenes en Python: los comandos se definen en `commands.ini` (plantillas, parámetros `--nombre valor`). Sirve para lanzar acciones, abrir URLs o ficheros según comandos que tú mismo configuras.
 
-## Instalacion para usuarios
+Minilauncher permite que esos comandos inventados por ti tengan autocompletado en bash, en powershell, o en el propio minilauncher (tiene modo shell)
 
-**Recomendado (una sola pasada):** desde la carpeta del proyecto, con Python 3.10+ instalado:
+**Ejemplos** (con el entorno ya instalado y activado):
 
-- **Windows (PowerShell):** `.\install.ps1`
-- **Linux / macOS / Git Bash:** `chmod +x install.sh && ./install.sh`
-
-Eso crea `.venv`, instala dependencias y registra el comando **`mini-launcher`** en el entorno virtual.
-
-Después:
-
-```bash
-# Activa el venv (Windows PowerShell)
-.\.venv\Scripts\Activate.ps1
-
-# Activa el venv (Git Bash / Linux / macOS)
-source .venv/bin/activate
-
+```text
 mini-launcher --list
-```
-
-**Autocompletado en Git Bash** (opcional): con el venv activado, `mini-launcher` queda en el PATH; luego:
-
-```bash
-mini-launcher --install-bash-completion
-source ~/.bashrc
-```
-
-El bloque en `~/.bashrc` usa `alias l='mini-launcher'` si el comando existe; si no, cae a `python /ruta/a/launcher.py`.
-
-**Manual sin scripts:** clona el repo, crea un venv e instala en modo editable (así `commands.ini` sigue junto al código):
-
-```bash
-python -m venv .venv
-source .venv/bin/activate   # o Activate.ps1 en Windows
-pip install -e .
-```
-
-**Alternativas para mas adelante:** publicar en PyPI y usar `pipx install mini-launcher2`, o un **ejecutable** con PyInstaller para quien no quiera ver Python.
-
-## Uso rapido
-
-Con el venv activado y `pip install -e .` (o los scripts `install.*`), usa **`mini-launcher`**; si ejecutas desde el repo sin instalar, sigue siendo valido **`python launcher.py`**.
-
-Tambien puedes instalar solo dependencias con `pip install -r requirements.txt` (equivalente a lo declarado en `pyproject.toml`).
-
-1. Ver comandos disponibles:
-
-```bash
-mini-launcher --list
-```
-
-2. Ejecutar comando (opciones largas estilo Bash):
-
-```bash
-mini-launcher deploy --env dev --version 1.2.3
-mini-launcher logs --service api --level error
-mini-launcher buscar --termino "ejemplo de texto a buscar"
-```
-
-3. Modo shell interactivo (sin argumentos):
-
-```bash
+mini-launcher deploy --env dev --version 1.0
 mini-launcher
 ```
 
-Comandos internos en la shell:
+Sin argumentos entra en una shell interactiva; dentro: `list`, `help`, `q` para salir.
 
-- `list`: lista comandos configurados
-- `help`: muestra ayuda rapida
-- `q` / `exit` / `quit`: salir
+---
 
-En modo interactivo, el historial se guarda en `.launcher_history` para reutilizarlo entre sesiones (navegable con flechas arriba/abajo).
+## Instalación desde cero
 
-## Estructura del archivo de configuracion (INI)
+1. Instala **Python 3.10+** y clona o descarga este proyecto.
 
-Cada comando tiene:
+2. En la carpeta del proyecto:
 
-- `template`: comando shell que se ejecuta
-- `mode`: modo de ejecución (`shell`, `browser`, `open`)
-- `params`: nombres de parametros (separados por coma); en la linea de comandos se usan como `--nombre`
-- `required`: parametros obligatorios (separados por coma)
-- `<param>.choices`: lista de valores sugeridos/validados (separados por coma)
-- `<param>.path`: si es `true`, en la **shell interactiva** el Tab completa rutas del sistema de ficheros para ese parametro (usa `prompt_toolkit`).
+   - **Windows (PowerShell):** `.\install.ps1`
+   - **Linux / macOS:** `chmod +x install.sh && ./install.sh`
 
-En la CLI: `--param valor` o `--param=valor` (con comillas si lleva espacios).
+3. Activa el entorno virtual:
 
-Ejemplo:
+   - PowerShell: `.\.venv\Scripts\Activate.ps1`
+   - Bash: `source .venv/bin/activate`
 
-```ini
-[deploy]
-mode = shell
-template = echo Desplegando entorno={env} version={version}
-params = env, version
-required = env, version
-env.choices = dev, staging, prod
-```
+4. Comprueba: `mini-launcher --list`
 
-### Modos de ejecucion
-
-- `shell`: ejecuta la plantilla en shell (como hasta ahora).
-- `browser`: abre el resultado de `template` en el navegador por defecto.
-- `open`: abre el resultado de `template` con la aplicacion asociada del sistema (fichero, carpeta o URL).
-
-Ejemplos:
-
-```ini
-[buscar]
-description = Abre una busqueda en el navegador por defecto
-mode = browser
-template = https://www.google.com/search?q={termino}
-params = termino
-required = termino
-
-[abrir]
-description = Abre fichero o URL con la app asociada
-mode = open
-template = {ruta}
-params = ruta
-required = ruta
-ruta.path = true
-```
-
-En **Windows**, en la shell interactiva del launcher, las rutas con barra invertida (`C:\Users\...`) ya no se rompen al trocear la linea (antes `shlex` POSIX interpretaba secuencias como `\U` o `\t`). Tambien puedes usar comillas o rutas con `/`.
-
-## Activar autocompletado en Bash
-
-### Automatico (recomendado)
-
-Desde el directorio del proyecto (con Python disponible):
-
-```bash
-python launcher.py --install-bash-completion
-```
-
-Esto añade un bloque marcado a tu `~/.bashrc` (alias `l`, `source` del venv si existe, y `source` de `launcher-completion.bash`). **No borres** `launcher-completion.bash` en el proyecto: el instalador solo registra el alias y hace `source` de ese fichero; la logica de autocompletado (Tab) sigue ahi. Para otro fichero:
-
-```bash
-python launcher.py --install-bash-completion --bashrc ~/.profile
-```
-
-Para quitar el bloque:
-
-```bash
-python launcher.py --uninstall-bash-completion
-```
-
-Luego en Git Bash:
-
-```bash
-source ~/.bashrc
-```
-
-Con el alias activo puedes usar, por ejemplo:
-
-```bash
-l --list
-l deploy --env dev --version 1.2.3
-```
-
-### Manual
-
-Define un alias para llamar al launcher como `l`:
-
-```bash
-alias l='python /ruta/a/miniLauncher2/launcher.py'
-```
-
-Carga el script de completion:
-
-```bash
-source /ruta/a/miniLauncher2/launcher-completion.bash
-```
-
-Para dejarlo persistente, agrega ambas lineas a tu `~/.bashrc`.
-
-### Nota para Git Bash en Windows
-
-En Git Bash, lo mas fiable es usar el entorno virtual activado y un alias:
-
-```bash
-source .venv/Scripts/activate
-alias l='python /c/Users/hsanc/miniLauncher2/launcher.py'
-source /c/Users/hsanc/miniLauncher2/launcher-completion.bash
-```
-
-Comprobaciones rapidas:
-
-```bash
-type -a l
-complete -p l
-```
-
-Si `complete -p l` muestra `_mini_launcher_complete`, el autocompletado esta registrado.
-
-### Configuracion persistente en ~/.bashrc
-
-Pega este bloque en tu `~/.bashrc`:
-
-```bash
-# miniLauncher2
-if [ -f /c/Users/hsanc/miniLauncher2/.venv/Scripts/activate ]; then
-  source /c/Users/hsanc/miniLauncher2/.venv/Scripts/activate
-fi
-
-alias l='python /c/Users/hsanc/miniLauncher2/launcher.py'
-
-if [ -f /c/Users/hsanc/miniLauncher2/launcher-completion.bash ]; then
-  source /c/Users/hsanc/miniLauncher2/launcher-completion.bash
-fi
-```
-
-Recarga la shell:
-
-```bash
-source ~/.bashrc
-```
+**Opcional — autocompletado con Tab:** `mini-launcher --install-bash-completion` (Git Bash) o `mini-launcher --install-powershell-completion` (PowerShell); luego recarga la terminal o el perfil.
