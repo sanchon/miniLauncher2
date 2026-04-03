@@ -6,32 +6,70 @@ Launcher de linea de comandos en Python con:
 - ejecucion por plantilla (`template`)
 - autocompletado en Bash para comandos y parametros
 
-## Uso rapido
+## Instalacion para usuarios
 
-Instala dependencias:
+**Recomendado (una sola pasada):** desde la carpeta del proyecto, con Python 3.10+ instalado:
+
+- **Windows (PowerShell):** `.\install.ps1`
+- **Linux / macOS / Git Bash:** `chmod +x install.sh && ./install.sh`
+
+Eso crea `.venv`, instala dependencias y registra el comando **`mini-launcher`** en el entorno virtual.
+
+Después:
 
 ```bash
-pip install -r requirements.txt
+# Activa el venv (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# Activa el venv (Git Bash / Linux / macOS)
+source .venv/bin/activate
+
+mini-launcher --list
 ```
+
+**Autocompletado en Git Bash** (opcional): con el venv activado, `mini-launcher` queda en el PATH; luego:
+
+```bash
+mini-launcher --install-bash-completion
+source ~/.bashrc
+```
+
+El bloque en `~/.bashrc` usa `alias l='mini-launcher'` si el comando existe; si no, cae a `python /ruta/a/launcher.py`.
+
+**Manual sin scripts:** clona el repo, crea un venv e instala en modo editable (así `commands.ini` sigue junto al código):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # o Activate.ps1 en Windows
+pip install -e .
+```
+
+**Alternativas para mas adelante:** publicar en PyPI y usar `pipx install mini-launcher2`, o un **ejecutable** con PyInstaller para quien no quiera ver Python.
+
+## Uso rapido
+
+Con el venv activado y `pip install -e .` (o los scripts `install.*`), usa **`mini-launcher`**; si ejecutas desde el repo sin instalar, sigue siendo valido **`python launcher.py`**.
+
+Tambien puedes instalar solo dependencias con `pip install -r requirements.txt` (equivalente a lo declarado en `pyproject.toml`).
 
 1. Ver comandos disponibles:
 
 ```bash
-python launcher.py --list
+mini-launcher --list
 ```
 
 2. Ejecutar comando (opciones largas estilo Bash):
 
 ```bash
-python launcher.py deploy --env dev --version 1.2.3
-python launcher.py logs --service api --level error
-python launcher.py buscar --termino "ejemplo de texto a buscar"
+mini-launcher deploy --env dev --version 1.2.3
+mini-launcher logs --service api --level error
+mini-launcher buscar --termino "ejemplo de texto a buscar"
 ```
 
 3. Modo shell interactivo (sin argumentos):
 
 ```bash
-python launcher.py
+mini-launcher
 ```
 
 Comandos internos en la shell:
@@ -51,6 +89,7 @@ Cada comando tiene:
 - `params`: nombres de parametros (separados por coma); en la linea de comandos se usan como `--nombre`
 - `required`: parametros obligatorios (separados por coma)
 - `<param>.choices`: lista de valores sugeridos/validados (separados por coma)
+- `<param>.path`: si es `true`, en la **shell interactiva** el Tab completa rutas del sistema de ficheros para ese parametro (usa `prompt_toolkit`).
 
 En la CLI: `--param valor` o `--param=valor` (con comillas si lleva espacios).
 
@@ -87,7 +126,10 @@ mode = open
 template = {ruta}
 params = ruta
 required = ruta
+ruta.path = true
 ```
+
+En **Windows**, en la shell interactiva del launcher, las rutas con barra invertida (`C:\Users\...`) ya no se rompen al trocear la linea (antes `shlex` POSIX interpretaba secuencias como `\U` o `\t`). Tambien puedes usar comillas o rutas con `/`.
 
 ## Activar autocompletado en Bash
 
@@ -99,7 +141,7 @@ Desde el directorio del proyecto (con Python disponible):
 python launcher.py --install-bash-completion
 ```
 
-Esto añade un bloque marcado a tu `~/.bashrc` (alias `l`, `source` del venv si existe, y `launcher-completion.bash`). Para otro fichero:
+Esto añade un bloque marcado a tu `~/.bashrc` (alias `l`, `source` del venv si existe, y `source` de `launcher-completion.bash`). **No borres** `launcher-completion.bash` en el proyecto: el instalador solo registra el alias y hace `source` de ese fichero; la logica de autocompletado (Tab) sigue ahi. Para otro fichero:
 
 ```bash
 python launcher.py --install-bash-completion --bashrc ~/.profile

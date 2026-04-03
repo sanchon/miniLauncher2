@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-launcher2"
+version = "0.1.0"
+description = "Launcher CLI configurable (INI + shell interactiva + autocompletado Bash)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8",
+    "prompt_toolkit>=3",
+]
+
+[project.scripts]
+mini-launcher = "launcher:main"
+
+[tool.setuptools]
+py-modules = ["launcher"]

@@ -10,13 +10,29 @@ from urllib.parse import quote_plus
 
 import click
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
+from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 
 
 DEFAULT_CONFIG = Path(__file__).with_name("commands.ini")
 DEFAULT_HISTORY = Path(__file__).with_name(".launcher_history")
 ALLOWED_MODES = {"shell", "open", "browser"}
+
+
+def split_cli_line(line: str) -> list[str]:
+    """Parte una línea tipo shell para el modo interactivo y el autocompletado.
+
+    En Windows, ``posix=False`` evita que ``\\`` en rutas (p.ej. ``C:\\Users\\...``)
+    se interpreten como escapes POSIX (``\\U``, ``\\t``, etc.), que corrompen la ruta.
+    """
+    if not line.strip():
+        return []
+    posix = os.name != "nt"
+    try:
+        return shlex.split(line, posix=posix)
+    except ValueError:
+        return line.split()
 
 BASHRC_BLOCK_START = "# <<< miniLauncher2 bash completion >>>"
 BASHRC_BLOCK_END = "# <<< end miniLauncher2 bash completion >>>"
@@ -37,7 +53,14 @@ def path_for_bash(path: Path) -> str:
 def bashrc_block_content(project_dir: Path) -> str:
     launcher_py = project_dir / "launcher.py"
     completion_bash = project_dir / "launcher-completion.bash"
-    venv_activate = project_dir / ".venv" / "Scripts" / "activate"
+    scripts_act = project_dir / ".venv" / "Scripts" / "activate"
+    bin_act = project_dir / ".venv" / "bin" / "activate"
+    if scripts_act.exists():
+        venv_activate = scripts_act
+    elif bin_act.exists():
+        venv_activate = bin_act
+    else:
+        venv_activate = scripts_act
     lp = path_for_bash(launcher_py)
     cb = path_for_bash(completion_bash)
     va = path_for_bash(venv_activate)
@@ -46,7 +69,11 @@ def bashrc_block_content(project_dir: Path) -> str:
         f'if [ -f "{va}" ]; then',
         f'  source "{va}"',
         "fi",
-        f"alias l='python \"{lp}\"'",
+        "if command -v mini-launcher >/dev/null 2>&1; then",
+        "  alias l='mini-launcher'",
+        "else",
+        f'  alias l=\'python "{lp}"\'',
+        "fi",
         f'if [ -f "{cb}" ]; then',
         f'  source "{cb}"',
         "fi",
@@ -128,19 +155,23 @@ def load_config(config_path: Path) -> dict:
         ]
 
         choices_map: dict[str, list[str]] = {}
+        path_map: dict[str, bool] = {}
         for key, raw_val in sec.items():
-            if not key.endswith(".choices"):
-                continue
-            param_name = key[: -len(".choices")].strip()
-            values = [x.strip() for x in raw_val.split(",") if x.strip()]
-            choices_map[param_name] = values
+            if key.endswith(".choices"):
+                param_name = key[: -len(".choices")].strip()
+                values = [x.strip() for x in raw_val.split(",") if x.strip()]
+                choices_map[param_name] = values
+            elif key.endswith(".path"):
+                param_name = key[: -len(".path")].strip()
+                path_map[param_name] = raw_val.strip().lower() in ("1", "true", "yes", "on")
 
-        all_params = set(params_list) | required | set(choices_map.keys())
+        all_params = set(params_list) | required | set(choices_map.keys()) | set(path_map.keys())
         params: dict[str, dict] = {}
         for p in sorted(all_params):
             params[p] = {
                 "required": p in required,
                 "choices": choices_map.get(p, []),
+                "path": path_map.get(p, False),
             }
 
         description = sec.get("description", "").strip()
@@ -302,6 +333,49 @@ def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with
     return current, []
 
 
+def path_completion_context(cfg: dict, text_before_cursor: str) -> str | None:
+    """Si el cursor completa el valor de un parametro marcado como ruta, devuelve el fragmento de ruta (puede ser '')."""
+    if not text_before_cursor.strip():
+        return None
+    line_ends_space = text_before_cursor[-1].isspace()
+    words = split_cli_line(text_before_cursor.rstrip())
+    if not words:
+        return None
+    cmd = words[0]
+    if cmd not in cfg.get("commands", {}):
+        return None
+
+    params_meta = cfg["commands"][cmd]["params"]
+
+    def is_path(name: str) -> bool:
+        p = params_meta.get(name, {})
+        return bool(p.get("path"))
+
+    if line_ends_space:
+        current = ""
+        rest = words[1:]
+    else:
+        current = words[-1]
+        rest = words[1:-1]
+
+    used, pending = _parse_rest_for_completion(rest)
+
+    if line_ends_space and pending and is_path(pending):
+        return ""
+
+    if not line_ends_space and pending and is_path(pending):
+        if current.startswith("--"):
+            return None
+        return current
+
+    if not line_ends_space and current.startswith("--") and "=" in current:
+        key, partial = current[2:].split("=", 1)
+        if key in params_meta and is_path(key):
+            return partial
+
+    return None
+
+
 def apply_template(template: str, values: dict[str, str], mode: str) -> str:
     out = template
     for key, val in values.items():
@@ -370,16 +444,17 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
         return 0 if ok else 1
 
     if mode == "open":
-        print(f"Abriendo recurso: {rendered}")
+        path = os.path.normpath(os.path.expanduser(os.path.expandvars(rendered)))
+        print(f"Abriendo recurso: {path}")
         try:
             if os.name == "nt":
-                os.startfile(rendered)  # type: ignore[attr-defined]
+                os.startfile(path)  # type: ignore[attr-defined]
                 return 0
             if sys.platform == "darwin":
-                return subprocess.run(["open", rendered], check=False).returncode
-            return subprocess.run(["xdg-open", rendered], check=False).returncode
+                return subprocess.run(["open", path], check=False).returncode
+            return subprocess.run(["xdg-open", path], check=False).returncode
         except OSError as exc:
-            print(f"No se pudo abrir '{rendered}': {exc}", file=sys.stderr)
+            print(f"No se pudo abrir '{path}': {exc}", file=sys.stderr)
             return 1
 
     print(f"Modo no soportado: {mode}", file=sys.stderr)
@@ -392,10 +467,7 @@ def complete_mode(cfg: dict) -> int:
     line = line[:point]
 
     line_ends_with_space = bool(line) and line[-1].isspace()
-    try:
-        words = shlex.split(line, posix=True) if line.strip() else []
-    except ValueError:
-        words = line.split()
+    words = split_cli_line(line) if line.strip() else []
     current, candidates = completion_candidates_from_words(cfg, words[1:], line_ends_with_space)
 
     for c in candidates:
@@ -407,14 +479,18 @@ def complete_mode(cfg: dict) -> int:
 class LauncherCompleter(Completer):
     def __init__(self, cfg: dict):
         self.cfg = cfg
+        self._path_completer = PathCompleter(expanduser=True)
 
     def get_completions(self, document, complete_event):
         text_before_cursor = document.text_before_cursor
+        frag = path_completion_context(self.cfg, text_before_cursor)
+        if frag is not None:
+            sub = Document(frag, cursor_position=len(frag))
+            yield from self._path_completer.get_completions(sub, complete_event)
+            return
+
         line_ends_with_space = bool(text_before_cursor) and text_before_cursor[-1].isspace()
-        try:
-            words = shlex.split(text_before_cursor, posix=True) if text_before_cursor.strip() else []
-        except ValueError:
-            words = text_before_cursor.split()
+        words = split_cli_line(text_before_cursor) if text_before_cursor.strip() else []
         current, candidates = completion_candidates_from_words(
             self.cfg,
             words,
@@ -464,11 +540,7 @@ def run_interactive_shell(cfg: dict) -> int:
                     click.echo(f" - {c}")
             continue
 
-        try:
-            parts = shlex.split(line, posix=True)
-        except ValueError as exc:
-            click.echo(f"No se pudo interpretar la línea (revisa las comillas): {exc}", err=True)
-            continue
+        parts = split_cli_line(line)
         command = parts[0]
         args = parts[1:]
         run_command(cfg, command, args)
