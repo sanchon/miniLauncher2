@@ -6,6 +6,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import click
 from prompt_toolkit import PromptSession
@@ -45,7 +46,7 @@ def bashrc_block_content(project_dir: Path) -> str:
         f'if [ -f "{va}" ]; then',
         f'  source "{va}"',
         "fi",
-        f"alias launcher='python \"{lp}\"'",
+        f"alias l='python \"{lp}\"'",
         f'if [ -f "{cb}" ]; then',
         f'  source "{cb}"',
         "fi",
@@ -181,6 +182,68 @@ def list_param_values(cfg: dict, cmd_name: str, param_name: str) -> list[str]:
     return [str(x) for x in choices]
 
 
+def parse_long_options(args: list[str], valid_params: set[str]) -> tuple[dict[str, str], list[str]]:
+    """Parsea `--k v`, `--k=v`. Devuelve (valores, tokens no reconocidos / posicionales)."""
+    values: dict[str, str] = {}
+    unknown: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if not tok.startswith("--"):
+            unknown.append(tok)
+            i += 1
+            continue
+        opt = tok[2:]
+        if "=" in opt:
+            key, val = opt.split("=", 1)
+            if key not in valid_params:
+                unknown.append(tok)
+            else:
+                values[key] = val
+            i += 1
+            continue
+        key = opt
+        if key not in valid_params:
+            unknown.append(tok)
+            i += 1
+            continue
+        if i + 1 < len(args) and not args[i + 1].startswith("--"):
+            values[key] = args[i + 1]
+            i += 2
+        else:
+            unknown.append(tok)
+            i += 1
+    return values, unknown
+
+
+def _parse_rest_for_completion(rest: list[str]) -> tuple[dict[str, str], str | None]:
+    """used params; pending = nombre de param si falta el valor (--foo al final)."""
+    used: dict[str, str] = {}
+    pending: str | None = None
+    i = 0
+    while i < len(rest):
+        t = rest[i]
+        if not t.startswith("--"):
+            i += 1
+            continue
+        body = t[2:]
+        if "=" in body:
+            k, v = body.split("=", 1)
+            used[k] = v
+            pending = None
+            i += 1
+            continue
+        k = body
+        if i + 1 < len(rest) and not rest[i + 1].startswith("--"):
+            used[k] = rest[i + 1]
+            pending = None
+            i += 2
+        else:
+            pending = k
+            i += 1
+    return used, pending
+
+
 def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with_space: bool) -> tuple[str, list[str]]:
     if not words:
         return "", list_command_names(cfg)
@@ -192,32 +255,63 @@ def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with
     if len(words) == 1 and line_ends_with_space:
         cmd_name = words[0]
         params = list_param_names(cfg, cmd_name)
-        return "", [f"{p}=" for p in params]
+        return "", [f"--{p}" for p in params]
 
     cmd_name = words[0]
+    param_names = list_param_names(cfg, cmd_name)
+    pname_set = set(param_names)
+
     if line_ends_with_space:
         current = ""
+        rest = words[1:]
     else:
         current = words[-1]
+        rest = words[1:-1]
 
-    used_params = set()
-    for tok in words[1:]:
-        if "=" in tok:
-            used_params.add(tok.split("=", 1)[0])
+    used, pending = _parse_rest_for_completion(rest)
 
-    if "=" in current:
-        p_name, _ = current.split("=", 1)
-        vals = list_param_values(cfg, cmd_name, p_name)
-        return current, [f"{p_name}={v}" for v in vals]
+    if line_ends_with_space:
+        if pending:
+            vals = list_param_values(cfg, cmd_name, pending)
+            if vals:
+                return "", vals
+            return "", []
+        unused = [p for p in param_names if p not in used]
+        return "", [f"--{p}" for p in unused]
 
-    params = [p for p in list_param_names(cfg, cmd_name) if p not in used_params]
-    return current, [f"{p}=" for p in params]
+    if current.startswith("--"):
+        if "=" in current:
+            key, partial = current[2:].split("=", 1)
+            if key not in pname_set:
+                return current, []
+            vals = list_param_values(cfg, cmd_name, key)
+            if vals:
+                return current, [f"--{key}={v}" for v in vals if str(v).startswith(partial)]
+            return current, []
+        prefix = current[2:]
+        unused = [p for p in param_names if p not in used]
+        matches = [f"--{p}" for p in unused if p.startswith(prefix)]
+        return current, matches
+
+    if pending:
+        vals = list_param_values(cfg, cmd_name, pending)
+        if vals:
+            return current, [v for v in vals if str(v).startswith(current)]
+        return current, []
+
+    return current, []
 
 
-def render_shell_command(template: str, values: dict[str, str]) -> str:
+def apply_template(template: str, values: dict[str, str], mode: str) -> str:
     out = template
     for key, val in values.items():
-        out = out.replace("{" + key + "}", shlex.quote(val))
+        if mode == "shell":
+            repl = shlex.quote(val)
+        elif mode == "browser":
+            repl = quote_plus(val)
+        else:
+            repl = val
+        out = out.replace("{" + key + "}", repl)
     return out
 
 
@@ -234,18 +328,15 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
 
     params_def = cmd_info.get("params", {})
     required = [k for k, v in params_def.items() if isinstance(v, dict) and v.get("required", False)]
+    valid_names = set(params_def.keys())
 
-    values: dict[str, str] = {}
-    unknown: list[str] = []
-    for tok in args:
-        if "=" not in tok:
-            unknown.append(tok)
-            continue
-        key, val = tok.split("=", 1)
-        values[key] = val
+    values, unknown = parse_long_options(args, valid_names)
 
     if unknown:
-        print(f"Argumentos inválidos (usa clave=valor): {' '.join(unknown)}", file=sys.stderr)
+        print(
+            f"Argumentos inválidos (usa --param valor o --param=valor): {' '.join(unknown)}",
+            file=sys.stderr,
+        )
         return 2
 
     missing = [k for k in required if k not in values]
@@ -265,8 +356,8 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
             )
             return 2
 
-    rendered = render_shell_command(template, values)
     mode = str(cmd_info.get("mode", "shell")).lower()
+    rendered = apply_template(template, values, mode)
 
     if mode == "shell":
         print(f"Ejecutando (shell): {rendered}")
@@ -300,8 +391,12 @@ def complete_mode(cfg: dict) -> int:
     point = int(os.environ.get("COMP_POINT", str(len(line))))
     line = line[:point]
 
-    words = line.split()
-    current, candidates = completion_candidates_from_words(cfg, words[1:], line.endswith(" "))
+    line_ends_with_space = bool(line) and line[-1].isspace()
+    try:
+        words = shlex.split(line, posix=True) if line.strip() else []
+    except ValueError:
+        words = line.split()
+    current, candidates = completion_candidates_from_words(cfg, words[1:], line_ends_with_space)
 
     for c in candidates:
         if c.startswith(current):
@@ -315,11 +410,15 @@ class LauncherCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text_before_cursor = document.text_before_cursor
-        words = text_before_cursor.split()
+        line_ends_with_space = bool(text_before_cursor) and text_before_cursor[-1].isspace()
+        try:
+            words = shlex.split(text_before_cursor, posix=True) if text_before_cursor.strip() else []
+        except ValueError:
+            words = text_before_cursor.split()
         current, candidates = completion_candidates_from_words(
             self.cfg,
             words,
-            text_before_cursor.endswith(" "),
+            line_ends_with_space,
         )
         for candidate in candidates:
             if candidate.startswith(current):
@@ -334,14 +433,14 @@ def run_interactive_shell(cfg: dict) -> int:
             completer=LauncherCompleter(cfg),
             history=FileHistory(str(DEFAULT_HISTORY)),
         )
-    click.echo("miniLauncher shell interactiva. Escribe 'help', 'list', 'exit' o 'quit'.")
+    click.echo("miniLauncher shell interactiva. Escribe 'help', 'list', 'q', 'exit' o 'quit'.")
 
     while True:
         try:
             if session is not None:
-                line = session.prompt("launcher> ").strip()
+                line = session.prompt("l> ").strip()
             else:
-                line = input("launcher> ").strip()
+                line = input("l> ").strip()
         except (EOFError, KeyboardInterrupt):
             click.echo("")
             return 0
@@ -349,11 +448,11 @@ def run_interactive_shell(cfg: dict) -> int:
         if not line:
             continue
 
-        if line in {"exit", "quit"}:
+        if line in {"exit", "quit", "q"}:
             return 0
         if line in {"help", "?"}:
-            click.echo("Uso: <comando> clave=valor ...")
-            click.echo("Comandos internos: list, help, exit, quit")
+            click.echo('Uso: <comando> --param valor ...  (también --param="valor con espacios")')
+            click.echo("Comandos internos: list, help, q, exit, quit")
             continue
         if line == "list":
             click.echo("Comandos disponibles:")
@@ -365,13 +464,23 @@ def run_interactive_shell(cfg: dict) -> int:
                     click.echo(f" - {c}")
             continue
 
-        parts = line.split()
+        try:
+            parts = shlex.split(line, posix=True)
+        except ValueError as exc:
+            click.echo(f"No se pudo interpretar la línea (revisa las comillas): {exc}", err=True)
+            continue
         command = parts[0]
         args = parts[1:]
         run_command(cfg, command, args)
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.command(
+    context_settings={
+        "help_option_names": ["-h", "--help"],
+        # Las opciones del comando (p.ej. --env) no son opciones de Click
+        "ignore_unknown_options": True,
+    }
+)
 @click.argument("command", required=False)
 @click.argument("params", nargs=-1)
 @click.option(
@@ -385,7 +494,7 @@ def run_interactive_shell(cfg: dict) -> int:
 @click.option(
     "--install-bash-completion",
     is_flag=True,
-    help="Añade al ~/.bashrc el alias y el script de autocompletado (Git Bash)",
+    help="Añade al ~/.bashrc el alias l y el script de autocompletado (Git Bash)",
 )
 @click.option(
     "--uninstall-bash-completion",

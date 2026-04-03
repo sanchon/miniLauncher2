@@ -28,6 +28,7 @@ _mini_launcher_complete() {
   COMPREPLY=( $(compgen -W "${suggestions}" -- "${cur}") )
 }
 
+complete -o default -F _mini_launcher_complete l
 complete -o default -F _mini_launcher_complete launcher
 complete -o default -F _mini_launcher_complete launcher.py
 complete -o default -F _mini_launcher_complete ./launcher.py
