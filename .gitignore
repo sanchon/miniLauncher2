@@ -16,3 +16,4 @@ __pycache__/
 
 # Datos de usuario
 .launcher_history
+/.claude/settings.local.json
