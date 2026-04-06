@@ -1,6 +1,6 @@
 # Referencia del fichero de configuración (`commands.ini`)
 
-miniLauncher2 lee un único fichero **INI** (por defecto `commands.ini` en el mismo directorio que `launcher.py`). Puedes usar otro con:
+miniLauncher2 lee un único fichero **INI** (por defecto `commands.ini` en el mismo directorio que el **ejecutable** en builds portátiles, o que `launcher.py` en desarrollo). El historial interactivo `.launcher_history` sigue la misma regla. Puedes usar otro INI con:
 
 ```text
 mini-launcher --config C:\ruta\mi_config.ini ...

@@ -1,0 +1,135 @@
+# Compila binarios (PyInstaller) al publicar un tag de versión, p. ej. v1.0.0
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias y PyInstaller
+        run: pip install ".[build]"
+
+      - name: PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py `
+            '--add-data=commands.ini;.' `
+            '--add-data=launcher-completion.bash;.' `
+            '--add-data=launcher-completion.ps1;.' `
+            --collect-all prompt_toolkit `
+            --collect-all click
+
+      - name: Nombre del artefacto
+        run: |
+          Copy-Item dist\mini-launcher.exe "mini-launcher_${{ github.ref_name }}_windows_x64.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: mini-launcher_${{ github.ref_name }}_windows_x64.exe
+
+  build-linux:
+    name: Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias y PyInstaller
+        run: pip install ".[build]"
+
+      - name: PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py \
+            --add-data "commands.ini:." \
+            --add-data "launcher-completion.bash:." \
+            --add-data "launcher-completion.ps1:." \
+            --collect-all prompt_toolkit \
+            --collect-all click
+
+      - name: Nombre del artefacto
+        run: |
+          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_x64"
+          chmod +x "mini-launcher_${{ github.ref_name }}_linux_x64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bin
+          path: mini-launcher_${{ github.ref_name }}_linux_x64
+
+  build-macos:
+    name: macOS (runner)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias y PyInstaller
+        run: pip install ".[build]"
+
+      - name: PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py \
+            --add-data "commands.ini:." \
+            --add-data "launcher-completion.bash:." \
+            --add-data "launcher-completion.ps1:." \
+            --collect-all prompt_toolkit \
+            --collect-all click
+
+      - name: Nombre del artefacto (incluye arquitectura)
+        id: pkg
+        run: |
+          ARCH=$(uname -m)
+          OUT="mini-launcher_${{ github.ref_name }}_macos_${ARCH}"
+          cp dist/mini-launcher "$OUT"
+          chmod +x "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-bin
+          path: ${{ steps.pkg.outputs.path }}
+
+  publish-release:
+    name: Publicar en GitHub Releases
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar artefactos
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Crear Release y adjuntar binarios
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

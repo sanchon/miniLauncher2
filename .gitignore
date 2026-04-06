@@ -1,5 +1,18 @@
+# Entorno virtual
 .venv/
+
+# Build
+dist/
+build/
 *.egg-info/
+*.spec
+
+# Python
 __pycache__/
 *.pyc
+
+# IDE local
+.vscode/
+
+# Datos de usuario
 .launcher_history

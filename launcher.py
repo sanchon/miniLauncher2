@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import configparser
+import io
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
 import webbrowser
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -16,8 +19,35 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 
 
-DEFAULT_CONFIG = Path(__file__).with_name("commands.ini")
-DEFAULT_HISTORY = Path(__file__).with_name(".launcher_history")
+def application_directory() -> Path:
+    """Carpeta de instalación portátil: junto al ejecutable (PyInstaller) o al proyecto (desarrollo)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+_APP_DIR = application_directory()
+DEFAULT_CONFIG = _APP_DIR / "commands.ini"
+DEFAULT_HISTORY = _APP_DIR / ".launcher_history"
+
+
+def ensure_bundled_files_beside_executable() -> None:
+    """Si es binario empaquetado, copia recursos desde el bundle a la carpeta del .exe si faltan."""
+    if not getattr(sys, "frozen", False):
+        return
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    src_root = Path(meipass)
+    dst_root = application_directory()
+    for name in ("commands.ini", "launcher-completion.bash", "launcher-completion.ps1"):
+        src = src_root / name
+        dst = dst_root / name
+        if src.exists() and not dst.exists():
+            try:
+                shutil.copy2(src, dst)
+            except OSError:
+                pass
 ALLOWED_MODES = {"shell", "open", "browser", "exec"}
 RESERVED_CONFIG_SECTIONS = frozenset({"mini-launcher"})
 
@@ -94,30 +124,24 @@ def path_for_bash(path: Path) -> str:
     return str(p).replace("\\", "/")
 
 
-def bashrc_block_content(project_dir: Path) -> str:
-    launcher_py = project_dir / "launcher.py"
-    completion_bash = project_dir / "launcher-completion.bash"
-    scripts_act = project_dir / ".venv" / "Scripts" / "activate"
-    bin_act = project_dir / ".venv" / "bin" / "activate"
-    if scripts_act.exists():
-        venv_activate = scripts_act
-    elif bin_act.exists():
-        venv_activate = bin_act
-    else:
-        venv_activate = scripts_act
-    lp = path_for_bash(launcher_py)
+def bashrc_block_content(app_dir: Path) -> str:
+    """Bloque ~/.bashrc: alias ``l`` y ``source`` del script de Tab (misma carpeta que el launcher)."""
+    app_dir = app_dir.resolve()
+    completion_bash = app_dir / "launcher-completion.bash"
     cb = path_for_bash(completion_bash)
-    va = path_for_bash(venv_activate)
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve()
+        launcher_q = path_for_bash(exe)
+        alias_line = f'alias l=\'"{launcher_q}"\''
+    else:
+        py = path_for_bash(Path(sys.executable).resolve())
+        launcher_py = (app_dir / "launcher.py").resolve()
+        lp = path_for_bash(launcher_py)
+        alias_line = f"alias l='{py} \"{lp}\"'"
     lines = [
         BASHRC_BLOCK_START,
-        f'if [ -f "{va}" ]; then',
-        f'  source "{va}"',
-        "fi",
-        "if command -v mini-launcher >/dev/null 2>&1; then",
-        "  alias l='mini-launcher'",
-        "else",
-        f'  alias l=\'python "{lp}"\'',
-        "fi",
+        f'export MINILAUNCHER_HOME="{path_for_bash(app_dir)}"',
+        alias_line,
         f'if [ -f "{cb}" ]; then',
         f'  source "{cb}"',
         "fi",
@@ -128,7 +152,7 @@ def bashrc_block_content(project_dir: Path) -> str:
 
 def install_bashrc(bashrc_path: Path) -> int:
     bashrc_path = bashrc_path.expanduser()
-    block = bashrc_block_content(Path(__file__).resolve().parent)
+    block = bashrc_block_content(application_directory())
     existing = ""
     if bashrc_path.exists():
         existing = bashrc_path.read_text(encoding="utf-8")
@@ -179,32 +203,49 @@ def ps_single_quoted(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
-def powershell_profile_block_content(project_dir: Path) -> str:
-    project_dir = project_dir.resolve()
-    venv_py = project_dir / ".venv" / "Scripts" / "python.exe"
-    if venv_py.exists():
-        py = str(venv_py)
-    else:
-        py = sys.executable
-    launcher_py = str((project_dir / "launcher.py").resolve())
-    py_q = ps_single_quoted(py)
-    lp_q = ps_single_quoted(launcher_py)
+def powershell_profile_block_content(app_dir: Path) -> str:
+    app_dir = app_dir.resolve()
     lines = [
         POWERSHELL_BLOCK_START,
-        f"$MiniLauncherPython = {py_q}",
-        f"$MiniLauncherScript = {lp_q}",
-        "$MiniLauncherCompletionBlock = {",
-        "    param(",
-        "        [string]$wordToComplete,",
-        "        [System.Management.Automation.Language.Ast]$commandAst,",
-        "        [int]$cursorPosition",
-        "    )",
-        "    $line = $commandAst.Extent.Text",
-        "    if ($null -eq $line) { return }",
-        "    $env:COMP_LINE = $line",
-        "    $env:COMP_POINT = [string]$cursorPosition",
-        "    & $MiniLauncherPython $MiniLauncherScript --complete 2>$null | ForEach-Object { $_ }",
-        "}.GetNewClosure()",
+        f"$MiniLauncherHome = {ps_single_quoted(str(app_dir))}",
+    ]
+    if getattr(sys, "frozen", False):
+        exe = str(Path(sys.executable).resolve())
+        lines += [
+            f"$MiniLauncherExe = {ps_single_quoted(exe)}",
+            "$MiniLauncherCompletionBlock = {",
+            "    param(",
+            "        [string]$wordToComplete,",
+            "        [System.Management.Automation.Language.Ast]$commandAst,",
+            "        [int]$cursorPosition",
+            "    )",
+            "    $line = $commandAst.Extent.Text",
+            "    if ($null -eq $line) { return }",
+            "    $env:COMP_LINE = $line",
+            "    $env:COMP_POINT = [string]$cursorPosition",
+            "    & $MiniLauncherExe --complete 2>$null | ForEach-Object { $_ }",
+            "}.GetNewClosure()",
+        ]
+    else:
+        py = ps_single_quoted(str(Path(sys.executable).resolve()))
+        launcher_py = ps_single_quoted(str((app_dir / "launcher.py").resolve()))
+        lines += [
+            f"$MiniLauncherPython = {py}",
+            f"$MiniLauncherScript = {launcher_py}",
+            "$MiniLauncherCompletionBlock = {",
+            "    param(",
+            "        [string]$wordToComplete,",
+            "        [System.Management.Automation.Language.Ast]$commandAst,",
+            "        [int]$cursorPosition",
+            "    )",
+            "    $line = $commandAst.Extent.Text",
+            "    if ($null -eq $line) { return }",
+            "    $env:COMP_LINE = $line",
+            "    $env:COMP_POINT = [string]$cursorPosition",
+            "    & $MiniLauncherPython $MiniLauncherScript --complete 2>$null | ForEach-Object { $_ }",
+            "}.GetNewClosure()",
+        ]
+    lines += [
         "Register-ArgumentCompleter -Native -CommandName 'mini-launcher' -ScriptBlock $MiniLauncherCompletionBlock",
         "Register-ArgumentCompleter -Native -CommandName 'l' -ScriptBlock $MiniLauncherCompletionBlock",
         POWERSHELL_BLOCK_END,
@@ -214,7 +255,7 @@ def powershell_profile_block_content(project_dir: Path) -> str:
 
 def install_powershell_profile(profile_path: Path) -> int:
     profile_path = profile_path.expanduser()
-    block = powershell_profile_block_content(Path(__file__).resolve().parent)
+    block = powershell_profile_block_content(application_directory())
     existing = ""
     if profile_path.exists():
         existing = profile_path.read_text(encoding="utf-8")
@@ -697,6 +738,40 @@ def complete_mode(cfg: dict) -> int:
     return 0
 
 
+def run_interactive_line(cfg: dict, line: str) -> tuple[bool, str]:
+    """Procesa una línea de la shell interactiva. Devuelve (continuar, texto a mostrar).
+
+    Si ``continuar`` es False, el bucle interactivo debe terminar. ``texto`` puede ser vacío.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return True, ""
+    if stripped in {"exit", "quit", "q"}:
+        return False, ""
+    if stripped in {"help", "?"}:
+        return True, (
+            'Uso: <comando> --param valor ...  (también --param="valor con espacios")\n'
+            "Comandos internos: list, help, q, exit, quit\n"
+        )
+    if stripped == "list":
+        lines_out: list[str] = []
+        for c in list_command_names(cfg):
+            desc = cfg["commands"].get(c, {}).get("description", "")
+            lines_out.append(f" - {c}: {desc}" if desc else f" - {c}")
+        return True, "Comandos disponibles:\n" + "\n".join(lines_out) + "\n"
+
+    parts = split_cli_line(stripped)
+    if not parts:
+        return True, ""
+    command = parts[0]
+    args = parts[1:]
+    buf = io.StringIO()
+    with redirect_stdout(buf), redirect_stderr(buf):
+        run_command(cfg, command, args)
+    out = buf.getvalue()
+    return True, out
+
+
 class LauncherCompleter(Completer):
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -742,29 +817,11 @@ def run_interactive_shell(cfg: dict) -> int:
             click.echo("")
             return 0
 
-        if not line:
-            continue
-
-        if line in {"exit", "quit", "q"}:
+        cont, text = run_interactive_line(cfg, line)
+        if not cont:
             return 0
-        if line in {"help", "?"}:
-            click.echo('Uso: <comando> --param valor ...  (también --param="valor con espacios")')
-            click.echo("Comandos internos: list, help, q, exit, quit")
-            continue
-        if line == "list":
-            click.echo("Comandos disponibles:")
-            for c in list_command_names(cfg):
-                desc = cfg["commands"].get(c, {}).get("description", "")
-                if desc:
-                    click.echo(f" - {c}: {desc}")
-                else:
-                    click.echo(f" - {c}")
-            continue
-
-        parts = split_cli_line(line)
-        command = parts[0]
-        args = parts[1:]
-        run_command(cfg, command, args)
+        if text:
+            click.echo(text, nl=False)
 
 
 @click.command(
@@ -787,7 +844,7 @@ def run_interactive_shell(cfg: dict) -> int:
 @click.option(
     "--install-bash-completion",
     is_flag=True,
-    help="Añade al ~/.bashrc el alias l y el script de autocompletado (Git Bash)",
+    help="Añade al ~/.bashrc el alias l y source de launcher-completion.bash (misma carpeta que el ejecutable)",
 )
 @click.option(
     "--uninstall-bash-completion",
@@ -830,6 +887,7 @@ def main(
     powershell_profile: Path | None,
 ) -> None:
     """Launcher CLI configurable."""
+    ensure_bundled_files_beside_executable()
     if install_bash_completion and uninstall_bash_completion:
         raise click.ClickException("Usa solo una de: --install-bash-completion o --uninstall-bash-completion")
     if install_powershell_completion and uninstall_powershell_completion:
