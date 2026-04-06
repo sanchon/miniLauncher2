@@ -4,6 +4,8 @@ Launcher de comandos personalizados para terminal. Define tus comandos en un fic
 
 Ideal para acortar tareas repetitivas (despliegues, abrir URLs, lanzar herramientas) con una interfaz coherente y sin escribir scripts a cada ruta.
 
+[![Demo](https://asciinema.org/a/N44JIajcRdYkMggo.svg)](https://asciinema.org/a/N44JIajcRdYkMggo)
+
 ---
 
 ## Instalación (binario portable)
