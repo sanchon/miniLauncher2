@@ -87,12 +87,14 @@ jobs:
       - name: Instalar dependencias del sistema
         run: apk add --no-cache python3 python3-dev py3-pip gcc musl-dev binutils libffi-dev
 
-      - name: Instalar dependencias y PyInstaller
-        run: pip3 install ".[build]"
+      - name: Crear virtualenv e instalar dependencias
+        run: |
+          python3 -m venv /opt/venv
+          /opt/venv/bin/pip install ".[build]"
 
       - name: PyInstaller
         run: |
-          pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py \
+          /opt/venv/bin/pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py \
             --add-data "commands.ini:." \
             --add-data "launcher-completion.bash:." \
             --add-data "launcher-completion.ps1:." \
