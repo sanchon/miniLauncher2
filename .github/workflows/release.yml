@@ -85,10 +85,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Instalar dependencias del sistema
-        run: apk add --no-cache gcc musl-dev binutils libffi-dev
+        run: apk add --no-cache gcc musl-dev binutils libffi-dev patchelf
 
       - name: Instalar dependencias y PyInstaller
-        run: pip install ".[build]"
+        run: pip install ".[build]" staticx
 
       - name: PyInstaller
         run: |
@@ -99,9 +99,12 @@ jobs:
             --collect-all prompt_toolkit \
             --collect-all click
 
+      - name: staticx (binario completamente estático)
+        run: staticx dist/mini-launcher dist/mini-launcher-static
+
       - name: Nombre del artefacto
         run: |
-          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
+          cp "dist/mini-launcher-static" "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
           chmod +x "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
 
       - uses: actions/upload-artifact@v4
