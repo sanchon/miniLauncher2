@@ -45,8 +45,8 @@ jobs:
           name: windows-exe
           path: mini-launcher_${{ github.ref_name }}_windows_x64.exe
 
-  build-linux:
-    name: Linux (x64)
+  build-linux-glibc:
+    name: Linux glibc (x64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,13 +69,45 @@ jobs:
 
       - name: Nombre del artefacto
         run: |
-          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_x64"
-          chmod +x "mini-launcher_${{ github.ref_name }}_linux_x64"
+          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_glibc_x64"
+          chmod +x "mini-launcher_${{ github.ref_name }}_linux_glibc_x64"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-bin
-          path: mini-launcher_${{ github.ref_name }}_linux_x64
+          name: linux-glibc-bin
+          path: mini-launcher_${{ github.ref_name }}_linux_glibc_x64
+
+  build-linux-musl:
+    name: Linux musl/Alpine (x64)
+    runs-on: ubuntu-latest
+    container: python:3.12-alpine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias del sistema
+        run: apk add --no-cache gcc musl-dev binutils libffi-dev
+
+      - name: Instalar dependencias y PyInstaller
+        run: pip install ".[build]"
+
+      - name: PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name mini-launcher launcher.py \
+            --add-data "commands.ini:." \
+            --add-data "launcher-completion.bash:." \
+            --add-data "launcher-completion.ps1:." \
+            --collect-all prompt_toolkit \
+            --collect-all click
+
+      - name: Nombre del artefacto
+        run: |
+          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
+          chmod +x "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-bin
+          path: mini-launcher_${{ github.ref_name }}_linux_musl_x64
 
   build-macos:
     name: macOS (runner)
@@ -115,7 +147,7 @@ jobs:
 
   publish-release:
     name: Publicar en GitHub Releases
-    needs: [build-windows, build-linux, build-macos]
+    needs: [build-windows, build-linux-glibc, build-linux-musl, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Descargar artefactos
