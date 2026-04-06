@@ -19,6 +19,7 @@ from prompt_toolkit.history import FileHistory
 DEFAULT_CONFIG = Path(__file__).with_name("commands.ini")
 DEFAULT_HISTORY = Path(__file__).with_name(".launcher_history")
 ALLOWED_MODES = {"shell", "open", "browser", "exec"}
+RESERVED_CONFIG_SECTIONS = frozenset({"mini-launcher"})
 
 
 def split_cli_line(line: str) -> list[str]:
@@ -265,8 +266,16 @@ def load_config(config_path: Path) -> dict:
     if not parser.sections():
         raise ValueError("La configuración INI debe tener al menos una sección de comando.")
 
+    defaults = {"browser_executable": "", "browser_arguments": ""}
+    if parser.has_section("mini-launcher"):
+        ml = parser["mini-launcher"]
+        defaults["browser_executable"] = ml.get("browser_executable", "").strip()
+        defaults["browser_arguments"] = ml.get("browser_arguments", "").strip()
+
     commands: dict[str, dict] = {}
     for cmd_name in parser.sections():
+        if cmd_name in RESERVED_CONFIG_SECTIONS:
+            continue
         sec = parser[cmd_name]
 
         required = {
@@ -334,7 +343,13 @@ def load_config(config_path: Path) -> dict:
             "detach": detach if mode == "exec" else False,
         }
 
-    return {"commands": commands}
+    if not commands:
+        raise ValueError(
+            "La configuración INI debe incluir al menos un comando "
+            "(una sección distinta de [mini-launcher])."
+        )
+
+    return {"commands": commands, "defaults": defaults}
 
 
 def list_command_names(cfg: dict) -> list[str]:
@@ -620,9 +635,34 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
         return proc.returncode
 
     if mode == "browser":
-        print(f"Abriendo en navegador: {rendered}")
-        ok = webbrowser.open(rendered)
-        return 0 if ok else 1
+        defs = cfg.get("defaults") or {}
+        exe_t = (cmd_info.get("executable") or "").strip() or (defs.get("browser_executable") or "").strip()
+        arg_t = (cmd_info.get("arguments") or "").strip() or (defs.get("browser_arguments") or "").strip()
+        if not exe_t:
+            print(f"Abriendo en navegador (predeterminado del sistema): {rendered}")
+            ok = webbrowser.open(rendered)
+            return 0 if ok else 1
+        exe_rendered = substitute_placeholders(exe_t, values)
+        exe_final = os.path.normpath(os.path.expanduser(os.path.expandvars(exe_rendered)))
+        merged = dict(values)
+        merged["url"] = rendered
+        arg_rendered = substitute_placeholders(arg_t, merged) if arg_t else ""
+        posix = os.name != "nt"
+        if not arg_rendered.strip():
+            argv = [exe_final, rendered]
+        else:
+            try:
+                raw_args = shlex.split(arg_rendered, posix=posix)
+                arg_list = strip_outer_shell_quotes(raw_args)
+            except ValueError as exc:
+                print(
+                    f"No se pudo interpretar 'arguments' del navegador (revisa comillas y {{url}}): {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            argv = [exe_final] + arg_list
+        print(f"Abriendo en navegador: {argv}", flush=True)
+        return run_exec_detached(argv)
 
     if mode == "open":
         path = os.path.normpath(os.path.expanduser(os.path.expandvars(rendered)))
