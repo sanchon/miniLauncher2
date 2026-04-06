@@ -80,17 +80,15 @@ jobs:
   build-linux-musl:
     name: Linux musl/Alpine (x64)
     runs-on: ubuntu-latest
-    container: python:3.12-alpine
+    container: alpine:3.17
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar dependencias del sistema
-        run: apk add --no-cache gcc musl-dev binutils libffi-dev patchelf
+        run: apk add --no-cache python3 python3-dev py3-pip gcc musl-dev binutils libffi-dev
 
       - name: Instalar dependencias y PyInstaller
-        run: |
-          pip install setuptools ".[build]"
-          pip install --no-build-isolation staticx
+        run: pip3 install ".[build]"
 
       - name: PyInstaller
         run: |
@@ -101,12 +99,9 @@ jobs:
             --collect-all prompt_toolkit \
             --collect-all click
 
-      - name: staticx (binario completamente estático)
-        run: staticx dist/mini-launcher dist/mini-launcher-static
-
       - name: Nombre del artefacto
         run: |
-          cp "dist/mini-launcher-static" "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
+          cp "dist/mini-launcher" "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
           chmod +x "mini-launcher_${{ github.ref_name }}_linux_musl_x64"
 
       - uses: actions/upload-artifact@v4
