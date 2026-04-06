@@ -1,3 +1,0 @@
-# Mismas versiones que pyproject.toml; instalación recomendada: pip install -e .
-click>=8
-prompt_toolkit>=3
