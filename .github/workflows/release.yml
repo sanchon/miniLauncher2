@@ -88,7 +88,9 @@ jobs:
         run: apk add --no-cache gcc musl-dev binutils libffi-dev patchelf
 
       - name: Instalar dependencias y PyInstaller
-        run: pip install setuptools ".[build]" staticx
+        run: |
+          pip install setuptools ".[build]"
+          pip install --no-build-isolation staticx
 
       - name: PyInstaller
         run: |
