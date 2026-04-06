@@ -12,10 +12,41 @@ Codificación recomendada: **UTF-8**.
 
 ## Estructura general
 
-- Cada **sección** `[nombre]` define **un comando lógico**. El `nombre` es el que escribes en la terminal (`deploy`, `logs`, etc.). Debe ser una sola palabra sin espacios; se distinguen mayúsculas y minúsculas tal como las escribes en el INI.
-- Dentro de cada sección hay **pares clave = valor**. Las claves que no se listan en esta referencia como reconocidas se **ignoran** al cargar, salvo las que terminan en `.choices` o `.path` (véase más abajo).
+- Cada **sección** `[nombre]` define normalmente **un comando lógico**. El `nombre` es el que escribes en la terminal (`deploy`, `logs`, etc.). Debe ser una sola palabra sin espacios; se distinguen mayúsculas y minúsculas tal como las escribes en el INI.
+- La sección reservada **`[mini-launcher]`** no define un comando: solo aporta **valores por defecto globales** (véase más abajo). No aparece en `mini-launcher --list`.
+- Dentro de cada sección de comando hay **pares clave = valor**. Las claves que no se listan en esta referencia como reconocidas se **ignoran** al cargar, salvo las que terminan en `.choices` o `.path` (véase más abajo).
 
-Si el fichero no tiene ninguna sección, la carga falla. En cada sección hace falta **`template`** salvo que `mode` sea **`exec`**, donde se usan `executable` y `arguments` en su lugar.
+Si el fichero no tiene ninguna sección, la carga falla. Debe existir **al menos un comando** (una sección distinta de `[mini-launcher]`).
+
+En cada sección de comando hace falta **`template`** salvo que `mode` sea **`exec`**, donde se usan `executable` y opcionalmente `arguments` en su lugar.
+
+---
+
+## Sección `[mini-launcher]` (opcional)
+
+Configuración **global** que no corresponde a ningún comando. Actualmente solo define el navegador por defecto para los comandos con `mode = browser`.
+
+| Clave | Obligatoria | Descripción |
+|--------|-------------|-------------|
+| `browser_executable` | No | Ruta o nombre en `PATH` del navegador a usar cuando un comando `browser` no define su propio `executable` y quieres forzar un navegador concreto. Si está **vacío**, los comandos `browser` usan el navegador predeterminado del sistema (`webbrowser.open`). |
+| `browser_arguments` | No | Línea de argumentos para ese navegador. Usa el marcador **`{url}`** para la URL final (ya construida a partir del `template` y los parámetros). Si está vacío y sí hay `browser_executable` (global o en el comando), se invoca `[ejecutable, url]` sin argumentos intermedios. |
+
+**Prioridad** respecto a un comando `mode = browser`:
+
+- **Ejecutable:** valor del comando `executable`, o si falta, `browser_executable` de `[mini-launcher]`.
+- **Argumentos:** valor del comando `arguments`, o si falta, `browser_arguments` de `[mini-launcher]`.
+
+En `executable` y `arguments` del navegador puedes usar **`{nombre}`** de los parámetros del comando además de **`{url}`** en `arguments`.
+
+Si hay un ejecutable explícito, el proceso se lanza **en segundo plano** (sin bloquear el launcher), con la misma lógica que `exec` con `detach = true`.
+
+**Ejemplo:**
+
+```ini
+[mini-launcher]
+browser_executable = C:\Program Files\Mozilla Firefox\firefox.exe
+browser_arguments = {url}
+```
 
 ---
 
@@ -57,31 +88,39 @@ Define **cómo** se usa la plantilla tras sustituir los marcadores. Valores perm
 | Valor | Comportamiento |
 |--------|------------------|
 | `shell` | **Por defecto** si omites `mode`. La cadena resultante se pasa al **intérprete de órdenes del sistema** (`subprocess` con `shell=True`). Los valores se escapan para uso en shell con `shlex.quote` (comillas seguras). |
-| `browser` | Se interpreta la cadena resultante como **URL** (p. ej. tras sustituir `{termino}` en una query). Los valores se codifican para URL con `urllib.parse.quote_plus` (adecuado para parámetros de búsqueda). Se abre con el **navegador por defecto** (`webbrowser.open`). |
+| `browser` | Se interpreta la cadena resultante como **URL** (p. ej. tras sustituir `{termino}` en una query). Los valores de parámetros en el `template` se codifican con `urllib.parse.quote_plus` (adecuado para términos de búsqueda). **Sin** `executable` (ni en el comando ni en `[mini-launcher]`): se abre con el **navegador predeterminado** (`webbrowser.open`). **Con** ejecutable configurado: se lanza ese programa con la URL (véase `executable` / `arguments` y `{url}`). |
 | `open` | La cadena resultante se trata como **ruta de fichero, carpeta o URL** según el sistema. Los valores se insertan **sin** comillas de shell. Antes de abrir se aplica `os.path.normpath`, `os.path.expanduser` y `os.path.expandvars`. En Windows: `os.startfile`; en macOS: `open`; en Linux: `xdg-open`. |
-| `exec` | Lanza un **proceso** sin pasar por el shell del sistema (`subprocess` con lista de argumentos, `shell=False`). Requiere **`executable`**; opcionalmente **`arguments`** con marcadores `{param}`. El ejecutable puede ser una ruta absoluta o un nombre resoluble por el **PATH** de Windows (válido también si invocas el launcher desde Git Bash: el proceso hijo es nativo de Windows). Los argumentos se trocean con `shlex.split` (en Windows con reglas adecuadas para rutas con `\`). |
+| `exec` | Lanza un **proceso** sin pasar por el shell del sistema (`subprocess` con lista de argumentos, `shell=False`). Requiere **`executable`**; opcionalmente **`arguments`** con marcadores `{param}`. Opcionalmente **`detach`** para no esperar al proceso. El ejecutable puede ser una ruta absoluta o un nombre resoluble por el **PATH** de Windows (válido también si invocas el launcher desde Git Bash: el proceso hijo es nativo de Windows). Los argumentos se trocean con `shlex.split` (en Windows con reglas adecuadas para rutas con `\`); véase comillas más abajo. |
 
 Si pones un `mode` distinto de estos cuatro, la carga del INI **falla**.
 
 ---
 
-### `executable` (obligatorio si `mode = exec`)
+### `executable`
 
-Ruta al **ejecutable** o nombre del programa (p. ej. `git`, `C:\Program Files\...\app.exe`). Puede contener marcadores `{param}` si el propio camino depende de parámetros.
+- **`mode = exec` (obligatorio):** ruta al **ejecutable** o nombre del programa (p. ej. `git`, `C:\Program Files\...\app.exe`). Puede contener marcadores `{param}` si el propio camino depende de parámetros. Tras sustituir placeholders se aplican `os.path.expanduser`, `os.path.expandvars` y `os.path.normpath`.
 
-Tras sustituir placeholders se aplican `os.path.expanduser`, `os.path.expandvars` y `os.path.normpath`.
+- **`mode = browser` (opcional):** si lo defines (o viene de `browser_executable` en `[mini-launcher]`), esa aplicación recibe la URL en lugar de usar `webbrowser`. Si lo omites en el comando y en `[mini-launcher]`, se usa el navegador del sistema.
 
 ---
 
-### `arguments` (opcional, solo con `mode = exec`)
+### `arguments`
 
-Cadena con **argumentos del proceso**, separados como en una línea de órdenes: puede incluir `{param}` que se sustituyen por los valores del usuario **sin** añadir comillas automáticas; puedes poner comillas en el INI si las necesitas.
+- **`mode = exec` (opcional):** cadena con **argumentos del proceso**, separados como en una línea de órdenes: puede incluir `{param}` sustituidos por los valores del usuario **sin** añadir comillas automáticas; puedes poner comillas en el INI si las necesitas (p. ej. `":e {fichero}"` para Neovim).
 
-Ejemplo: `arguments = log -n {n} --oneline`
+  Tras la sustitución, la cadena se divide con `shlex.split` y, en Windows, se quita **una capa de comillas** que envuelva un argumento entero (para que `-c` reciba el texto sin comillas literales).
 
-Tras la sustitución, la cadena se divide con `shlex.split` en la lista de argumentos pasada al ejecutable (el primer elemento del proceso es siempre `executable`; no uses `arguments` para repetir el nombre del exe).
+  Si omites `arguments` o queda vacío, se ejecuta solo el ejecutable sin argumentos extra.
 
-Si omites `arguments` o queda vacío, se ejecuta solo el ejecutable sin argumentos extra.
+- **`mode = browser` (opcional):** solo tiene efecto si hay un **`executable`** efectivo (en el comando o por defecto global). Usa **`{url}`** para insertar la URL ya resuelta. También puedes usar **`{param}`** de los parámetros del comando. Se aplica la misma división con `shlex.split` y el mismo tratamiento de comillas externas que en `exec`. Si queda vacío, el argv es `[ejecutable, url]`.
+
+---
+
+### `detach` (opcional, solo `mode = exec`)
+
+Si vale `1`, `true`, `yes` u `on` (sin distinguir mayúsculas), el proceso hijo se **arranca y no se espera** a que termine: el launcher vuelve al instante con código de salida `0` si el arranque fue correcto (el código de salida del hijo no se refleja). Los descriptores estándar del hijo van a `os.devnull`; en Windows se usan banderas de proceso desvinculadas de la consola; en Unix, `start_new_session=True`. Un hilo en segundo plano hace `wait()` sobre el hijo para evitar procesos zombi y fugas de handles.
+
+Si omites `detach` o es falso, **`exec` espera** al proceso y devuelve su código de salida.
 
 ---
 
@@ -155,6 +194,8 @@ Para cada parámetro presente en `values`, se reemplaza `{clave}` en `template` 
 
 En **`exec`**, la sustitución en `executable` y `arguments` es **literal** (valor tal cual, como en `open`), y no se usa `template`.
 
+En **`browser`** con navegador explícito, la URL final obtenida del `template` (tras `apply_template`) se expone como **`{url}`** en `arguments` (y en `executable` solo sustituyen los `{param}` habituales).
+
 Si la plantilla contiene un `{clave}` para el que no hay valor, ese marcador **no** se sustituye (no hay error explícito por marcadores sobrantes; conviene que todos los `{...}` tengan parámetro asociado).
 
 ---
@@ -183,7 +224,7 @@ Restricciones del parser:
 
 El mismo INI alimenta el modo `--complete` usado por Bash y PowerShell:
 
-- Nombres de **comandos** (secciones).
+- Nombres de **comandos** (secciones distintas de `[mini-launcher]`).
 - Para cada comando: `--param` y, si hay `choices`, valores tras `=`.
 
 Los parámetros con `path = true` solo añaden completado de rutas en la **shell interactiva** integrada, no en el script de Bash/PowerShell (allí no hay `PathCompleter`).
@@ -208,7 +249,9 @@ Uso:
 mini-launcher ejemplo --nombre Ada --lugar aqui
 ```
 
-## Ejemplo modo `exec`
+---
+
+## Ejemplo modo `exec` (esperar al proceso)
 
 ```ini
 [git_log]
@@ -227,6 +270,50 @@ mini-launcher git_log --n 5
 
 ---
 
+## Ejemplo modo `exec` (segundo plano)
+
+```ini
+[editor]
+mode = exec
+executable = neovide
+arguments = -- -c ":e {fichero}"
+detach = true
+params = fichero
+required = fichero
+fichero.path = true
+```
+
+---
+
+## Ejemplo modo `browser` con navegador concreto
+
+```ini
+[mini-launcher]
+browser_executable = C:\Program Files\Google\Chrome\Application\chrome.exe
+browser_arguments = {url}
+
+[buscar]
+description = Busqueda en Google
+mode = browser
+template = https://www.google.com/search?q={termino}
+params = termino
+required = termino
+```
+
+O solo en un comando (sin `[mini-launcher]`):
+
+```ini
+[buscar]
+mode = browser
+template = https://example.com/?q={termino}
+executable = C:\Program Files\Mozilla Firefox\firefox.exe
+arguments = {url}
+params = termino
+required = termino
+```
+
+---
+
 ## Comentarios y formato INI
 
 El fichero sigue las reglas habituales de `configparser` en Python:
@@ -240,13 +327,23 @@ Evita caracteres ambiguos en los **valores** de listas separadas por comas si es
 
 ## Resumen rápido de claves
 
+### Sección `[mini-launcher]`
+
+| Clave | Obligatoria | Descripción breve |
+|-------|-------------|-------------------|
+| `browser_executable` | No | Navegador por defecto para `mode = browser` (vacío = sistema). |
+| `browser_arguments` | No | Argumentos con `{url}`; vacío = `[exe, url]`. |
+
+### Sección de cada comando
+
 | Clave | Obligatoria | Descripción breve |
 |-------|-------------|-------------------|
 | `template` | Sí, salvo `exec` | Plantilla con `{param}` (`shell` / `browser` / `open`). |
 | `description` | No | Texto para `--list`. |
 | `mode` | No (`shell` por defecto) | `shell` \| `browser` \| `open` \| `exec`. |
-| `executable` | Sí si `exec` | Ejecutable o comando en PATH. |
-| `arguments` | No | Argumentos del proceso con `{param}` (solo `exec`). |
+| `executable` | Sí si `exec`; opcional si `browser` | Proceso a lanzar; en `browser` sustituye al navegador del sistema si está definido (o el de `[mini-launcher]`). |
+| `arguments` | No | `exec`: argumentos con `{param}`. `browser`: con `{url}` y opcionalmente `{param}`. |
+| `detach` | No | Solo `exec`: `true`/`yes`/… = no esperar al proceso. |
 | `params` | No* | Lista de parámetros separada por comas. |
 | `required` | No | Subconjunto obligatorio separado por comas. |
 | `param.choices` | No | Valores permitidos para `param`. |

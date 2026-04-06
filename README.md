@@ -69,5 +69,5 @@ Misma idea en **Git Bash** o **PowerShell** (después de `--install-bash-complet
 
 | Recurso | Contenido |
 |---------|-----------|
-| [docs/configuracion-ini.md](docs/configuracion-ini.md) | Referencia completa del fichero INI: `template`, `mode`, `params`, `required`, `*.choices`, `*.path`, sustitución y validación. |
+| [docs/configuracion-ini.md](docs/configuracion-ini.md) | Referencia del INI: `[mini-launcher]`, `template`, `mode`, `executable` / `arguments` (`exec` y `browser`), `detach`, `params`, `required`, `*.choices`, `*.path`, sustitución y ejemplos. |
 | [docs/grabar-demo.md](docs/grabar-demo.md) | Cómo grabar un GIF o un cast de asciinema para el README. |
