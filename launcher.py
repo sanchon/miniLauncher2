@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -17,7 +18,7 @@ from prompt_toolkit.history import FileHistory
 
 DEFAULT_CONFIG = Path(__file__).with_name("commands.ini")
 DEFAULT_HISTORY = Path(__file__).with_name(".launcher_history")
-ALLOWED_MODES = {"shell", "open", "browser"}
+ALLOWED_MODES = {"shell", "open", "browser", "exec"}
 
 
 def split_cli_line(line: str) -> list[str]:
@@ -33,6 +34,45 @@ def split_cli_line(line: str) -> list[str]:
         return shlex.split(line, posix=posix)
     except ValueError:
         return line.split()
+
+
+def strip_outer_shell_quotes(args: list[str]) -> list[str]:
+    """Quita una capa de comillas que envuelve un argumento entero.
+
+    En Windows, ``shlex.split(..., posix=False)`` conserva ``"`` y ``'`` dentro
+    del token; hace falta para no romper rutas con ``\\``. Si el usuario agrupa
+    un argumento con comillas en ``commands.ini`` (p. ej. ``-c ":e {fichero}"``),
+    sin esto Neovim recibiría las comillas como parte del comando ``-c``.
+    """
+    out: list[str] = []
+    for a in args:
+        if len(a) >= 2 and a[0] == a[-1] and a[0] in "\"'":
+            out.append(a[1:-1])
+        else:
+            out.append(a)
+    return out
+
+
+def run_exec_detached(argv: list[str]) -> int:
+    """Arranca ``argv`` sin bloquear; el hilo demonio hace ``wait()`` al terminar el hijo."""
+    kwargs: dict = {
+        "shell": False,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(argv, **kwargs)
+    except OSError as exc:
+        print(f"No se pudo ejecutar el proceso: {exc}", file=sys.stderr)
+        return 1
+    threading.Thread(target=proc.wait, daemon=True).start()
+    return 0
+
 
 BASHRC_BLOCK_START = "# <<< miniLauncher2 bash completion >>>"
 BASHRC_BLOCK_END = "# <<< end miniLauncher2 bash completion >>>"
@@ -228,9 +268,6 @@ def load_config(config_path: Path) -> dict:
     commands: dict[str, dict] = {}
     for cmd_name in parser.sections():
         sec = parser[cmd_name]
-        template = sec.get("template", "").strip()
-        if not template:
-            raise ValueError(f"La sección '{cmd_name}' debe definir 'template'.")
 
         required = {
             x.strip()
@@ -270,11 +307,31 @@ def load_config(config_path: Path) -> dict:
                 f"La sección '{cmd_name}' tiene mode inválido '{mode}'. "
                 f"Usa uno de: {', '.join(sorted(ALLOWED_MODES))}."
             )
+
+        template = sec.get("template", "").strip()
+        executable_line = sec.get("executable", "").strip()
+        arguments_line = sec.get("arguments", "").strip()
+
+        detach_line = sec.get("detach", "").strip().lower()
+        detach = detach_line in ("1", "true", "yes", "on")
+
+        if mode == "exec":
+            if not executable_line:
+                raise ValueError(
+                    f"La sección '{cmd_name}' con mode=exec debe definir 'executable' "
+                    f"(ruta al ejecutable o nombre resoluble por el sistema, p. ej. git o C:\\\\...\\\\app.exe)."
+                )
+        elif not template:
+            raise ValueError(f"La sección '{cmd_name}' debe definir 'template'.")
+
         commands[cmd_name] = {
             "template": template,
             "description": description,
             "mode": mode,
             "params": params,
+            "executable": executable_line,
+            "arguments": arguments_line,
+            "detach": detach if mode == "exec" else False,
         }
 
     return {"commands": commands}
@@ -465,6 +522,14 @@ def path_completion_context(cfg: dict, text_before_cursor: str) -> str | None:
     return None
 
 
+def substitute_placeholders(template: str, values: dict[str, str]) -> str:
+    """Sustituye {clave} por el valor tal cual (sin comillas); para rutas y argumentos de proceso."""
+    out = template
+    for key, val in values.items():
+        out = out.replace("{" + key + "}", val)
+    return out
+
+
 def apply_template(template: str, values: dict[str, str], mode: str) -> str:
     out = template
     for key, val in values.items():
@@ -484,10 +549,8 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
         print(f"Comando desconocido: {command_name}", file=sys.stderr)
         return 2
 
-    template = cmd_info.get("template")
-    if not template:
-        print(f"El comando '{command_name}' no tiene 'template'.", file=sys.stderr)
-        return 2
+    mode = str(cmd_info.get("mode", "shell")).lower()
+    template = cmd_info.get("template") or ""
 
     params_def = cmd_info.get("params", {})
     required = [k for k, v in params_def.items() if isinstance(v, dict) and v.get("required", False)]
@@ -519,7 +582,36 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
             )
             return 2
 
-    mode = str(cmd_info.get("mode", "shell")).lower()
+    if mode == "exec":
+        exe_t = cmd_info.get("executable", "").strip()
+        arg_t = cmd_info.get("arguments", "").strip()
+        exe_rendered = substitute_placeholders(exe_t, values)
+        arg_rendered = substitute_placeholders(arg_t, values)
+        posix = os.name != "nt"
+        try:
+            raw_args = shlex.split(arg_rendered, posix=posix) if arg_rendered.strip() else []
+            arg_list = strip_outer_shell_quotes(raw_args)
+        except ValueError as exc:
+            print(f"No se pudo interpretar 'arguments' (revisa comillas): {exc}", file=sys.stderr)
+            return 2
+        exe_final = os.path.normpath(os.path.expanduser(os.path.expandvars(exe_rendered)))
+        argv = [exe_final] + arg_list
+        detach = bool(cmd_info.get("detach"))
+        tag = "exec, segundo plano" if detach else "exec"
+        print(f"Ejecutando ({tag}): {argv}", flush=True)
+        try:
+            if detach:
+                return run_exec_detached(argv)
+            proc = subprocess.run(argv, shell=False)
+            return proc.returncode
+        except OSError as exc:
+            print(f"No se pudo ejecutar el proceso: {exc}", file=sys.stderr)
+            return 1
+
+    if not template:
+        print(f"El comando '{command_name}' no tiene 'template'.", file=sys.stderr)
+        return 2
+
     rendered = apply_template(template, values, mode)
 
     if mode == "shell":

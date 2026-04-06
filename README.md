@@ -11,7 +11,7 @@ Define comandos en un fichero de configuración, ejecútalos con opciones al est
 | | |
 |--|--|
 | **Configuración clara** | Comandos y plantillas en `commands.ini` — sin recompilar nada. |
-| **Varios modos** | Ejecutar en shell, abrir en el navegador o con la app por defecto del sistema. |
+| **Varios modos** | Shell, navegador, abrir con la app del sistema, o **lanzar un .exe/proceso** con argumentos (`exec`). |
 | **Autocompletado** | Misma lógica para Git Bash, PowerShell y el modo interactivo (`prompt_toolkit`). |
 | **Shell propia** | `mini-launcher` sin argumentos → prompt `l>`, historial persistente, salida con `q`. |
 
