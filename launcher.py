@@ -14,8 +14,10 @@ from urllib.parse import quote_plus
 
 import click
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import get_app
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 
 
@@ -50,6 +52,14 @@ def ensure_bundled_files_beside_executable() -> None:
                 pass
 ALLOWED_MODES = {"shell", "open", "browser", "exec"}
 RESERVED_CONFIG_SECTIONS = frozenset({"mini-launcher"})
+
+_BANNER = """\
+────────────────────────────────────────
+  ╔╦╗╦╔╗╔╦  ╦  ╔═╗╦ ╦╔╗╔╔═╗╦ ╦╔═╗╦═╗
+  ║║║║║║║║  ║  ╠═╣║ ║║║║║  ╠═╣╠═ ╠╦╝
+  ╩ ╩╩╝╚╝╩  ╩═╝╩ ╩╚═╝╝╚╝╚═╝╩ ╩╚═╝╩╚═
+     🚀  help · list · q · exit
+────────────────────────────────────────"""
 
 
 def split_cli_line(line: str) -> list[str]:
@@ -342,8 +352,12 @@ def load_config(config_path: Path) -> dict:
                 path_map[param_name] = raw_val.strip().lower() in ("1", "true", "yes", "on")
 
         all_params = set(params_list) | required | set(choices_map.keys()) | set(path_map.keys())
+        # Preservar el orden definido en 'params = ...' del INI; luego el resto alfabético
+        param_order: list[str] = list(params_list)
+        for p in sorted(all_params - set(params_list)):
+            param_order.append(p)
         params: dict[str, dict] = {}
-        for p in sorted(all_params):
+        for p in param_order:
             params[p] = {
                 "required": p in required,
                 "choices": choices_map.get(p, []),
@@ -377,6 +391,7 @@ def load_config(config_path: Path) -> dict:
         commands[cmd_name] = {
             "template": template,
             "description": description,
+            "param_order": param_order,
             "mode": mode,
             "params": params,
             "executable": executable_line,
@@ -399,6 +414,8 @@ def list_command_names(cfg: dict) -> list[str]:
 
 def list_param_names(cfg: dict, cmd_name: str) -> list[str]:
     cmd = cfg["commands"].get(cmd_name, {})
+    if "param_order" in cmd:
+        return list(cmd["param_order"])
     params = cmd.get("params", {})
     if not isinstance(params, dict):
         return []
@@ -449,14 +466,26 @@ def parse_long_options(args: list[str], valid_params: set[str]) -> tuple[dict[st
     return values, unknown
 
 
-def _parse_rest_for_completion(rest: list[str]) -> tuple[dict[str, str], str | None]:
-    """used params; pending = nombre de param si falta el valor (--foo al final)."""
+def _parse_rest_for_completion(
+    rest: list[str], param_order: list[str] | None = None
+) -> tuple[dict[str, str], str | None]:
+    """used params; pending = nombre de param si falta el valor (--foo al final).
+
+    Si se pasa ``param_order``, los tokens sin ``--`` se asignan posicionalmente
+    al siguiente parámetro libre en ese orden.
+    """
     used: dict[str, str] = {}
     pending: str | None = None
+    param_order = param_order or []
     i = 0
     while i < len(rest):
         t = rest[i]
         if not t.startswith("--"):
+            # Argumento posicional: asignar al siguiente parámetro libre
+            unset = [p for p in param_order if p not in used]
+            if unset:
+                used[unset[0]] = t
+            pending = None
             i += 1
             continue
         body = t[2:]
@@ -501,7 +530,9 @@ def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with
         current = words[-1]
         rest = words[1:-1]
 
-    used, pending = _parse_rest_for_completion(rest)
+    used, pending = _parse_rest_for_completion(rest, param_names)
+
+    has_named = any(t.startswith("--") for t in rest)
 
     if line_ends_with_space:
         if pending:
@@ -510,6 +541,11 @@ def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with
                 return "", vals
             return "", []
         unused = [p for p in param_names if p not in used]
+        if not has_named and unused:
+            # Modo posicional: ofrecer valores del siguiente slot libre
+            vals = list_param_values(cfg, cmd_name, unused[0])
+            if vals:
+                return "", vals
         return "", [f"--{p}" for p in unused]
 
     if current.startswith("--"):
@@ -532,6 +568,14 @@ def completion_candidates_from_words(cfg: dict, words: list[str], line_ends_with
             return current, [v for v in vals if str(v).startswith(current)]
         return current, []
 
+    if not has_named:
+        # Modo posicional: completar el slot que se está escribiendo ahora
+        unused = [p for p in param_names if p not in used]
+        if unused:
+            vals = list_param_values(cfg, cmd_name, unused[0])
+            if vals:
+                return current, [v for v in vals if str(v).startswith(current)]
+
     return current, []
 
 
@@ -553,6 +597,8 @@ def path_completion_context(cfg: dict, text_before_cursor: str) -> str | None:
         p = params_meta.get(name, {})
         return bool(p.get("path"))
 
+    param_names = list_param_names(cfg, cmd)
+
     if line_ends_space:
         current = ""
         rest = words[1:]
@@ -560,7 +606,9 @@ def path_completion_context(cfg: dict, text_before_cursor: str) -> str | None:
         current = words[-1]
         rest = words[1:-1]
 
-    used, pending = _parse_rest_for_completion(rest)
+    used, pending = _parse_rest_for_completion(rest, param_names)
+
+    has_named = any(t.startswith("--") for t in rest)
 
     if line_ends_space and pending and is_path(pending):
         return ""
@@ -574,6 +622,17 @@ def path_completion_context(cfg: dict, text_before_cursor: str) -> str | None:
         key, partial = current[2:].split("=", 1)
         if key in params_meta and is_path(key):
             return partial
+
+    # Modo posicional: detectar si el slot actual es una ruta
+    if not line_ends_space and not current.startswith("--") and not has_named:
+        unused = [p for p in param_names if p not in used]
+        if unused and is_path(unused[0]):
+            return current
+
+    if line_ends_space and not has_named:
+        unused = [p for p in param_names if p not in used]
+        if unused and is_path(unused[0]):
+            return ""
 
     return None
 
@@ -611,15 +670,22 @@ def run_command(cfg: dict, command_name: str, args: list[str]) -> int:
     params_def = cmd_info.get("params", {})
     required = [k for k, v in params_def.items() if isinstance(v, dict) and v.get("required", False)]
     valid_names = set(params_def.keys())
+    param_order = cmd_info.get("param_order", sorted(valid_names))
 
-    values, unknown = parse_long_options(args, valid_names)
+    values, positional_unknowns = parse_long_options(args, valid_names)
 
-    if unknown:
+    # Asignar argumentos posicionales a los slots libres en el orden del INI
+    unset_params = [p for p in param_order if p not in values]
+    if len(positional_unknowns) > len(unset_params):
         print(
-            f"Argumentos inválidos (usa --param valor o --param=valor): {' '.join(unknown)}",
+            f"Demasiados argumentos posicionales: se esperaban como máximo "
+            f"{len(unset_params)} ({', '.join(unset_params)}), "
+            f"se recibieron {len(positional_unknowns)}.",
             file=sys.stderr,
         )
         return 2
+    for i, val in enumerate(positional_unknowns):
+        values[unset_params[i]] = val
 
     missing = [k for k in required if k not in values]
     if missing:
@@ -750,9 +816,15 @@ def run_interactive_line(cfg: dict, line: str) -> tuple[bool, str]:
         return False, ""
     if stripped in {"help", "?"}:
         return True, (
-            'Uso: <comando> --param valor ...  (también --param="valor con espacios")\n'
-            "Comandos internos: list, help, q, exit, quit\n"
+            "Uso:\n"
+            '  <comando> valor1 valor2 ...          (modo posicional, en el orden del INI)\n'
+            '  <comando> --param valor ...           (modo nombrado)\n'
+            '  <comando> --param="valor con espacios"\n'
+            "Comandos internos: list, help, clear, q, exit, quit\n"
         )
+    if stripped == "clear":
+        click.clear()
+        return True, ""
     if stripped == "list":
         lines_out: list[str] = []
         for c in list_command_names(cfg):
@@ -797,6 +869,59 @@ class LauncherCompleter(Completer):
                 yield Completion(candidate, start_position=-len(current))
 
 
+def _make_positional_toolbar(cfg: dict):
+    """Devuelve un callable para ``bottom_toolbar`` que muestra el orden de parámetros
+    cuando el usuario escribe en modo posicional (sin ``--``)."""
+
+    def toolbar() -> FormattedText | str:
+        try:
+            text = get_app().current_buffer.text
+        except Exception:
+            return ""
+        if not text.strip():
+            return ""
+        try:
+            words = split_cli_line(text.rstrip())
+        except Exception:
+            return ""
+        if not words:
+            return ""
+        cmd_name = words[0]
+        if cmd_name not in cfg.get("commands", {}):
+            return ""
+        param_names = list_param_names(cfg, cmd_name)
+        if not param_names:
+            return ""
+
+        # Solo mostrar en modo posicional (sin tokens --param tras el comando)
+        rest = words[1:]
+        if any(t.startswith("--") for t in rest):
+            return ""
+
+        # Cuántos posicionales ya se han completado
+        positional_done = len(rest)
+        if text and not text[-1].isspace():
+            # El último token se está escribiendo todavía
+            positional_done = max(0, positional_done - 1)
+
+        # Necesitamos al menos haber escrito el comando + espacio para mostrar el hint
+        if len(words) < 2 and not (text and text[-1].isspace()):
+            return ""
+
+        parts: list[tuple[str, str]] = [("class:bottom-toolbar", " orden: ")]
+        for i, name in enumerate(param_names):
+            if i < positional_done:
+                parts.append(("class:bottom-toolbar", f"[{name}] "))
+            elif i == positional_done:
+                parts.append(("bg:ansiyellow fg:ansiblack bold", f" {name} "))
+                parts.append(("class:bottom-toolbar", " "))
+            else:
+                parts.append(("class:bottom-toolbar", f"{name} "))
+        return FormattedText(parts)
+
+    return toolbar
+
+
 def run_interactive_shell(cfg: dict) -> int:
     use_prompt_toolkit = sys.stdin.isatty() and sys.stdout.isatty()
     session = None
@@ -804,8 +929,10 @@ def run_interactive_shell(cfg: dict) -> int:
         session = PromptSession(
             completer=LauncherCompleter(cfg),
             history=FileHistory(str(DEFAULT_HISTORY)),
+            bottom_toolbar=_make_positional_toolbar(cfg),
         )
-    click.echo("miniLauncher shell interactiva. Escribe 'help', 'list', 'q', 'exit' o 'quit'.")
+    click.clear()
+    click.echo(_BANNER)
 
     while True:
         try:
