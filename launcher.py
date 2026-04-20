@@ -42,7 +42,7 @@ def ensure_bundled_files_beside_executable() -> None:
         return
     src_root = Path(meipass)
     dst_root = application_directory()
-    for name in ("commands.ini", "launcher-completion.bash", "launcher-completion.ps1"):
+    for name in ("commands.ini", "launcher-completion.bash", "launcher-completion.ps1", "launcher-completion.zsh"):
         src = src_root / name
         dst = dst_root / name
         if src.exists() and not dst.exists():
@@ -117,6 +117,9 @@ def run_exec_detached(argv: list[str]) -> int:
 
 BASHRC_BLOCK_START = "# <<< miniLauncher2 bash completion >>>"
 BASHRC_BLOCK_END = "# <<< end miniLauncher2 bash completion >>>"
+
+ZSHRC_BLOCK_START = "# <<< miniLauncher2 zsh completion >>>"
+ZSHRC_BLOCK_END = "# <<< end miniLauncher2 zsh completion >>>"
 
 POWERSHELL_BLOCK_START = "# <<< miniLauncher2 PowerShell completion >>>"
 POWERSHELL_BLOCK_END = "# <<< end miniLauncher2 PowerShell completion >>>"
@@ -201,6 +204,77 @@ def uninstall_bashrc(bashrc_path: Path) -> int:
             out.append(line)
     bashrc_path.write_text("".join(out), encoding="utf-8")
     click.echo(f"Bloque miniLauncher2 eliminado de: {bashrc_path}")
+    return 0
+
+
+def zshrc_block_content(app_dir: Path) -> str:
+    """Bloque ~/.zshrc: alias ``l``, compinit guard y ``source`` del script de Tab."""
+    app_dir = app_dir.resolve()
+    completion_zsh = app_dir / "launcher-completion.zsh"
+    cz = path_for_bash(completion_zsh)
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve()
+        launcher_q = path_for_bash(exe)
+        alias_line = f'alias l=\'"{launcher_q}"\''
+    else:
+        py = path_for_bash(Path(sys.executable).resolve())
+        launcher_py = (app_dir / "launcher.py").resolve()
+        lp = path_for_bash(launcher_py)
+        alias_line = f"alias l='{py} \"{lp}\"'"
+    lines = [
+        ZSHRC_BLOCK_START,
+        f'export MINILAUNCHER_HOME="{path_for_bash(app_dir)}"',
+        alias_line,
+        f'if [ -f "{cz}" ]; then',
+        "  (( ${+functions[compdef]} )) || { autoload -Uz compinit && compinit }",
+        f'  source "{cz}"',
+        "fi",
+        ZSHRC_BLOCK_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def install_zshrc(zshrc_path: Path) -> int:
+    zshrc_path = zshrc_path.expanduser()
+    block = zshrc_block_content(application_directory())
+    existing = ""
+    if zshrc_path.exists():
+        existing = zshrc_path.read_text(encoding="utf-8")
+    if ZSHRC_BLOCK_START in existing:
+        click.echo(f"Ya estaba registrado en: {zshrc_path}")
+        return 0
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    zshrc_path.parent.mkdir(parents=True, exist_ok=True)
+    zshrc_path.write_text(existing + block, encoding="utf-8")
+    click.echo(f"Autocompletado Zsh registrado en: {zshrc_path}")
+    click.echo("Ejecuta: source ~/.zshrc   (o abre una nueva terminal Zsh)")
+    return 0
+
+
+def uninstall_zshrc(zshrc_path: Path) -> int:
+    zshrc_path = zshrc_path.expanduser()
+    if not zshrc_path.exists():
+        click.echo(f"No existe: {zshrc_path}", err=True)
+        return 1
+    text = zshrc_path.read_text(encoding="utf-8")
+    if ZSHRC_BLOCK_START not in text:
+        click.echo(f"No hay bloque miniLauncher2 en: {zshrc_path}", err=True)
+        return 1
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    skip = False
+    for line in lines:
+        if ZSHRC_BLOCK_START in line:
+            skip = True
+            continue
+        if skip and ZSHRC_BLOCK_END in line:
+            skip = False
+            continue
+        if not skip:
+            out.append(line)
+    zshrc_path.write_text("".join(out), encoding="utf-8")
+    click.echo(f"Bloque miniLauncher2 eliminado de: {zshrc_path}")
     return 0
 
 
@@ -922,6 +996,95 @@ def _make_positional_toolbar(cfg: dict):
     return toolbar
 
 
+def generate_omz_plugin_content(cfg: dict, launcher_argv: list[str]) -> str:
+    """Genera el contenido del plugin oh-my-zsh a partir de la configuración."""
+    # Representar el comando como array zsh para manejar correctamente
+    # tanto el binario empaquetado (['mini-launcher']) como dev (['python', 'script.py'])
+    zsh_array_items = " ".join(shlex.quote(a) for a in launcher_argv)
+    lines: list[str] = []
+    lines += [
+        "# Auto-generado por mini-launcher. No editar manualmente.",
+        "# Regenerar con:  mini-launcher --generate-omz-plugin",
+        "# Instalar con:   mini-launcher --install-omz-plugin",
+        "",
+        f"_mini_launcher_cmd=({zsh_array_items})",
+        "",
+    ]
+
+    for cmd_name, cmd_info in cfg["commands"].items():
+        description = cmd_info.get("description", "")
+        param_order: list[str] = cmd_info.get("param_order", [])
+        params: dict[str, dict] = cmd_info.get("params", {})
+
+        header = f"# {cmd_name}"
+        if description:
+            header += f" — {description}"
+        lines.append(header)
+
+        lines += [
+            f"function {cmd_name}() {{",
+            f'    "${{_mini_launcher_cmd[@]}}" {cmd_name} "$@"',
+            "}",
+        ]
+
+        if param_order:
+            lines.append(f"_{cmd_name}() {{")
+            lines.append("    _arguments \\")
+
+            specs: list[str] = []
+            for i, pname in enumerate(param_order, 1):
+                pdef = params.get(pname, {})
+                choices = pdef.get("choices", [])
+                is_path = pdef.get("path", False)
+                required = pdef.get("required", False)
+                colon = ":" if required else "::"
+
+                # Positional slot
+                if is_path:
+                    action = "_files"
+                elif choices:
+                    action = "(" + " ".join(str(c) for c in choices) + ")"
+                else:
+                    action = " "
+                specs.append(f"        '{i}{colon}{pname}:{action}'")
+
+                # Named --param counterpart
+                flag_desc = description if i == 1 else pname
+                if is_path:
+                    named = f"        '--{pname}[{pname}]:{pname}:_files'"
+                elif choices:
+                    choices_joined = " ".join(str(c) for c in choices)
+                    named = f"        '--{pname}[{pname}]:{pname}:({choices_joined})'"
+                else:
+                    named = f"        '--{pname}[{pname}]:{pname}: '"
+                specs.append(named)
+
+            lines.append(" \\\n".join(specs))
+            lines += [
+                "}",
+                f"compdef _{cmd_name} {cmd_name}",
+            ]
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def install_omz_plugin(cfg: dict, launcher_argv: list[str]) -> int:
+    omz_dir = Path.home() / ".oh-my-zsh" / "custom" / "plugins" / "mini-launcher"
+    omz_dir.mkdir(parents=True, exist_ok=True)
+    plugin_file = omz_dir / "mini-launcher.plugin.zsh"
+    content = generate_omz_plugin_content(cfg, launcher_argv)
+    plugin_file.write_text(content, encoding="utf-8")
+    click.echo(f"Plugin generado en: {plugin_file}")
+    click.echo("")
+    click.echo("Añade 'mini-launcher' a la lista plugins en ~/.zshrc:")
+    click.echo("  plugins=( ... mini-launcher )")
+    click.echo("")
+    click.echo("Luego recarga el shell:  source ~/.zshrc")
+    return 0
+
+
 def run_interactive_shell(cfg: dict) -> int:
     use_prompt_toolkit = sys.stdin.isatty() and sys.stdout.isatty()
     session = None
@@ -1000,6 +1163,34 @@ def run_interactive_shell(cfg: dict) -> int:
     default=None,
     help="Ruta al perfil de PowerShell (por defecto Documents/PowerShell/Microsoft.PowerShell_profile.ps1)",
 )
+@click.option(
+    "--install-zsh-completion",
+    is_flag=True,
+    help="Añade al ~/.zshrc el alias l y source de launcher-completion.zsh (misma carpeta que el ejecutable)",
+)
+@click.option(
+    "--uninstall-zsh-completion",
+    is_flag=True,
+    help="Elimina del ~/.zshrc el bloque añadido por --install-zsh-completion",
+)
+@click.option(
+    "--zshrc",
+    default="~/.zshrc",
+    show_default=True,
+    help="Fichero zshrc a modificar (por defecto ~/.zshrc)",
+)
+@click.option(
+    "--generate-omz-plugin",
+    "generate_omz",
+    is_flag=True,
+    help="Genera mini-launcher.plugin.zsh en el directorio actual (para oh-my-zsh)",
+)
+@click.option(
+    "--install-omz-plugin",
+    "install_omz",
+    is_flag=True,
+    help="Instala el plugin en ~/.oh-my-zsh/custom/plugins/mini-launcher/",
+)
 def main(
     command: str | None,
     params: tuple[str, ...],
@@ -1012,6 +1203,11 @@ def main(
     install_powershell_completion: bool,
     uninstall_powershell_completion: bool,
     powershell_profile: Path | None,
+    install_zsh_completion: bool,
+    uninstall_zsh_completion: bool,
+    zshrc: str,
+    generate_omz: bool,
+    install_omz: bool,
 ) -> None:
     """Launcher CLI configurable."""
     ensure_bundled_files_beside_executable()
@@ -1021,6 +1217,8 @@ def main(
         raise click.ClickException(
             "Usa solo una de: --install-powershell-completion o --uninstall-powershell-completion"
         )
+    if install_zsh_completion and uninstall_zsh_completion:
+        raise click.ClickException("Usa solo una de: --install-zsh-completion o --uninstall-zsh-completion")
 
     if install_bash_completion:
         code = install_bashrc(Path(bashrc))
@@ -1041,11 +1239,22 @@ def main(
         if code != 0:
             raise SystemExit(code)
 
+    if install_zsh_completion:
+        code = install_zshrc(Path(zshrc))
+        if code != 0:
+            raise SystemExit(code)
+    if uninstall_zsh_completion:
+        code = uninstall_zshrc(Path(zshrc))
+        if code != 0:
+            raise SystemExit(code)
+
     if (
         install_bash_completion
         or uninstall_bash_completion
         or install_powershell_completion
         or uninstall_powershell_completion
+        or install_zsh_completion
+        or uninstall_zsh_completion
     ):
         return
 
@@ -1056,6 +1265,20 @@ def main(
 
     if complete:
         raise SystemExit(complete_mode(cfg))
+
+    if generate_omz or install_omz:
+        if getattr(sys, "frozen", False):
+            launcher_argv = [str(Path(sys.executable).resolve())]
+        else:
+            launcher_argv = [str(Path(sys.executable).resolve()), str(Path(__file__).resolve())]
+        if generate_omz:
+            content = generate_omz_plugin_content(cfg, launcher_argv)
+            out = Path("mini-launcher.plugin.zsh")
+            out.write_text(content, encoding="utf-8")
+            click.echo(f"Plugin generado: {out.resolve()}")
+        else:
+            raise SystemExit(install_omz_plugin(cfg, launcher_argv))
+        return
 
     if list_commands:
         click.echo("Comandos disponibles:")
