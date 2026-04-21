@@ -79,46 +79,38 @@ Toda la documentación sobre los modos (`shell`, `browser`, `open`, `exec`), par
 
 ## Plugin para Zsh / oh-my-zsh
 
-El plugin expone cada comando de `commands.ini` como una función zsh con autocompletado nativo (Tab).
+El plugin expone cada comando de `commands.ini` como una función zsh con autocompletado nativo (Tab). Dado que los comandos son personales, el plugin se genera en local a partir de tu propia configuración.
 
-### Instalar manualmente con oh-my-zsh
+### Instalar
+
+**1.** Descarga el binario desde la [página de releases](../../releases) y colócalo en tu `PATH`.
+
+**2.** Genera e instala el plugin:
 
 ```zsh
 mini-launcher --install-omz-plugin
 ```
 
-Esto copia el plugin al directorio de plugins custom de oh-my-zsh y añade `mini-launcher` a la lista de plugins activos en `~/.zshrc`.
+Esto crea `~/.oh-my-zsh/custom/plugins/mini-launcher/mini-launcher.plugin.zsh`.
 
-### Instalar con zplug desde GitHub
-
-Añade esta línea a tu `~/.zshrc` antes de `zplug load`:
+**3.** Añade `mini-launcher` a la lista de plugins en `~/.zshrc`:
 
 ```zsh
-zplug "tu-usuario/miniLauncher2"
+plugins=(... mini-launcher)
 ```
 
-Luego ejecuta en la terminal:
+**4.** Recarga el shell:
 
 ```zsh
 source ~/.zshrc
-zplug install
-zplug load
 ```
-
-> **Requisito:** Python 3 debe estar disponible como `python3` en tu `PATH`, ya que el plugin lo invoca directamente.
 
 ### Regenerar el plugin tras cambiar `commands.ini`
 
-Si modificas los comandos, regenera el archivo del plugin y commitea el resultado:
-
 ```zsh
-mini-launcher --generate-omz-plugin
-git add mini-launcher.plugin.zsh
-git commit -m "chore: regenerar plugin zsh"
-git push
+mini-launcher --install-omz-plugin
+source ~/.zshrc
 ```
-
-zplug actualizará el plugin en tu máquina con `zplug update`.
 
 ---
 
