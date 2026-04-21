@@ -1007,7 +1007,8 @@ def generate_omz_plugin_content(cfg: dict, launcher_argv: list[str]) -> str:
         "# Regenerar con:  mini-launcher --generate-omz-plugin",
         "# Instalar con:   mini-launcher --install-omz-plugin",
         "",
-        f"_mini_launcher_cmd=({zsh_array_items})",
+        '_mini_launcher_dir="${0:A:h}"',
+        '_mini_launcher_cmd=(python3 "${_mini_launcher_dir}/launcher.py")',
         "",
     ]
 

@@ -2,7 +2,8 @@
 # Regenerar con:  mini-launcher --generate-omz-plugin
 # Instalar con:   mini-launcher --install-omz-plugin
 
-_mini_launcher_cmd=(/usr/bin/python3.12 /home/hugo/miniLauncher2/launcher.py)
+_mini_launcher_dir="${0:A:h}"
+_mini_launcher_cmd=(python3 "${_mini_launcher_dir}/launcher.py")
 
 # deploy — Despliega una version en un entorno
 function deploy() {
