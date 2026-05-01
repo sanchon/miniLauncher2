@@ -145,12 +145,12 @@ def bashrc_block_content(app_dir: Path) -> str:
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable).resolve()
         launcher_q = path_for_bash(exe)
-        alias_line = f'alias l=\'"{launcher_q}"\''
+        alias_line = f'alias mini-launcher=\'"{launcher_q}"\''
     else:
         py = path_for_bash(Path(sys.executable).resolve())
         launcher_py = (app_dir / "launcher.py").resolve()
         lp = path_for_bash(launcher_py)
-        alias_line = f"alias l='{py} \"{lp}\"'"
+        alias_line = f"alias mini-launcher='{py} \"{lp}\"'"
     lines = [
         BASHRC_BLOCK_START,
         f'export MINILAUNCHER_HOME="{path_for_bash(app_dir)}"',
@@ -215,12 +215,12 @@ def zshrc_block_content(app_dir: Path) -> str:
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable).resolve()
         launcher_q = path_for_bash(exe)
-        alias_line = f'alias l=\'"{launcher_q}"\''
+        alias_line = f'alias mini-launcher=\'"{launcher_q}"\''
     else:
         py = path_for_bash(Path(sys.executable).resolve())
         launcher_py = (app_dir / "launcher.py").resolve()
         lp = path_for_bash(launcher_py)
-        alias_line = f"alias l='{py} \"{lp}\"'"
+        alias_line = f"alias mini-launcher='{py} \"{lp}\"'"
     lines = [
         ZSHRC_BLOCK_START,
         f'export MINILAUNCHER_HOME="{path_for_bash(app_dir)}"',
@@ -1004,11 +1004,14 @@ def generate_omz_plugin_content(cfg: dict, launcher_argv: list[str]) -> str:
     lines: list[str] = []
     lines += [
         "# Auto-generado por mini-launcher. No editar manualmente.",
-        "# Regenerar con:  mini-launcher --generate-omz-plugin",
-        "# Instalar con:   mini-launcher --install-omz-plugin",
+        "# Regenerar con:  mini-launcher --install-omz-plugin",
         "",
         '_mini_launcher_dir="${0:A:h}"',
         '_mini_launcher_cmd=(python3 "${_mini_launcher_dir}/launcher.py")',
+        "",
+        "function mini-launcher() {",
+        '    "${_mini_launcher_cmd[@]}" "$@"',
+        "}",
         "",
     ]
 
@@ -1181,12 +1184,6 @@ def run_interactive_shell(cfg: dict) -> int:
     help="Fichero zshrc a modificar (por defecto ~/.zshrc)",
 )
 @click.option(
-    "--generate-omz-plugin",
-    "generate_omz",
-    is_flag=True,
-    help="Genera mini-launcher.plugin.zsh en el directorio actual (para oh-my-zsh)",
-)
-@click.option(
     "--install-omz-plugin",
     "install_omz",
     is_flag=True,
@@ -1207,7 +1204,6 @@ def main(
     install_zsh_completion: bool,
     uninstall_zsh_completion: bool,
     zshrc: str,
-    generate_omz: bool,
     install_omz: bool,
 ) -> None:
     """Launcher CLI configurable."""
@@ -1267,19 +1263,12 @@ def main(
     if complete:
         raise SystemExit(complete_mode(cfg))
 
-    if generate_omz or install_omz:
+    if install_omz:
         if getattr(sys, "frozen", False):
             launcher_argv = [str(Path(sys.executable).resolve())]
         else:
             launcher_argv = [str(Path(sys.executable).resolve()), str(Path(__file__).resolve())]
-        if generate_omz:
-            content = generate_omz_plugin_content(cfg, launcher_argv)
-            out = Path("mini-launcher.plugin.zsh")
-            out.write_text(content, encoding="utf-8")
-            click.echo(f"Plugin generado: {out.resolve()}")
-        else:
-            raise SystemExit(install_omz_plugin(cfg, launcher_argv))
-        return
+        raise SystemExit(install_omz_plugin(cfg, launcher_argv))
 
     if list_commands:
         click.echo("Comandos disponibles:")

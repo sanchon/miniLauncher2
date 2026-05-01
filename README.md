@@ -105,7 +105,7 @@ plugins=(... mini-launcher)
 source ~/.zshrc
 ```
 
-### Regenerar el plugin tras cambiar `commands.ini`
+### Actualizar el plugin tras cambiar `commands.ini`
 
 ```zsh
 mini-launcher --install-omz-plugin
