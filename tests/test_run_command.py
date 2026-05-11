@@ -5,7 +5,7 @@ from unittest.mock import call, patch, MagicMock
 
 import pytest
 
-from launcher import run_command
+from launcher import parse_long_options, run_command
 
 
 # ---------------------------------------------------------------------------
@@ -244,3 +244,159 @@ class TestComandoDesconocido:
     def test_devuelve_2_con_argumentos(self, cfg):
         rc = run_command(cfg, "no_existe", ["--env", "dev"])
         assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# parse_long_options — casos de borde no cubiertos
+# ---------------------------------------------------------------------------
+
+class TestParseLongOptions:
+
+    def test_formato_key_igual_val_conocido(self):
+        values, unknown = parse_long_options(["--env=dev"], {"env"})
+        assert values == {"env": "dev"}
+        assert unknown == []
+
+    def test_formato_key_igual_val_clave_desconocida(self):
+        values, unknown = parse_long_options(["--otro=val"], {"env"})
+        assert values == {}
+        assert "--otro=val" in unknown
+
+    def test_clave_desconocida_sin_valor(self):
+        values, unknown = parse_long_options(["--otro"], {"env"})
+        assert "--otro" in unknown
+
+    def test_flag_conocido_sin_valor_al_final(self):
+        values, unknown = parse_long_options(["--env"], {"env"})
+        assert "--env" in unknown
+
+    def test_flag_conocido_seguido_de_otro_flag(self):
+        values, unknown = parse_long_options(["--env", "--version"], {"env", "version"})
+        assert "--env" in unknown
+
+    def test_mezcla_conocidos_e_incognitos(self):
+        values, unknown = parse_long_options(
+            ["--env", "dev", "--otro"], {"env"}
+        )
+        assert values == {"env": "dev"}
+        assert "--otro" in unknown
+
+
+# ---------------------------------------------------------------------------
+# Rutas de error en run_command no cubiertas
+# ---------------------------------------------------------------------------
+
+class TestRunCommandRutasDeError:
+
+    # -- exec: ValueError al parsear arguments
+    def test_exec_arguments_malformados_devuelve_2(self, cfg):
+        with patch("launcher.shlex.split", side_effect=ValueError("comilla sin cerrar")):
+            rc = run_command(cfg, "git_log", ["--n", "1"])
+        assert rc == 2
+
+    # -- exec: OSError al lanzar subprocess.run
+    def test_exec_oserror_al_ejecutar_devuelve_1(self, cfg):
+        with patch("launcher.subprocess.run", side_effect=OSError("no encontrado")):
+            rc = run_command(cfg, "git_log", ["--n", "1"])
+        assert rc == 1
+
+    # -- browser: webbrowser.open devuelve False
+    def test_browser_webbrowser_falla_devuelve_1(self, cfg):
+        with patch("launcher.webbrowser.open", return_value=False):
+            rc = run_command(cfg, "buscar", ["--termino", "python"])
+        assert rc == 1
+
+    # -- browser con ejecutable: ValueError al parsear arguments
+    def test_browser_arguments_malformados_devuelve_2(self, cfg):
+        with patch("launcher.shlex.split", side_effect=ValueError("comilla sin cerrar")):
+            rc = run_command(cfg, "buscar_chrome", ["--q", "python"])
+        assert rc == 2
+
+    # -- browser con ejecutable sin arguments: pasa la URL directamente
+    def test_browser_con_ejecutable_sin_arguments_usa_url(self, cfg):
+        cfg["commands"]["buscar_chrome"]["arguments"] = ""
+        with patch("launcher.run_exec_detached", return_value=0) as mock_detach:
+            rc = run_command(cfg, "buscar_chrome", ["--q", "python"])
+        assert rc == 0
+        argv = mock_detach.call_args[0][0]
+        assert any("python" in str(a) for a in argv)
+
+    # -- open: OSError al llamar a xdg-open
+    def test_open_oserror_devuelve_1(self, cfg):
+        with patch("launcher.subprocess.run", side_effect=OSError("xdg-open no encontrado")), \
+             patch.object(os, "name", "posix"), \
+             patch.object(sys, "platform", "linux"):
+            rc = run_command(cfg, "abrir", ["--ruta", "/tmp"])
+        assert rc == 1
+
+    # -- open: ruta en Windows llama a os.startfile
+    def test_open_windows_llama_a_startfile(self, cfg):
+        with patch.object(os, "name", "nt"), \
+             patch("os.startfile", create=True) as mock_startfile:
+            rc = run_command(cfg, "abrir", ["--ruta", "/tmp"])
+        assert rc == 0
+        mock_startfile.assert_called_once()
+
+    # -- template vacío en modo no-exec
+    def test_sin_template_en_modo_shell_devuelve_2(self, cfg):
+        cfg["commands"]["deploy"]["template"] = ""
+        rc = run_command(cfg, "deploy", ["--env", "dev", "--version", "1.0"])
+        assert rc == 2
+
+    # -- modo no soportado (fallback defensivo)
+    def test_modo_no_soportado_devuelve_2(self, cfg):
+        cfg["commands"]["deploy"]["mode"] = "modo_inventado"
+        rc = run_command(cfg, "deploy", ["--env", "dev", "--version", "1.0"])
+        assert rc == 2
+
+    # -- choices: param opcional no proporcionado activa el continue (línea 772)
+    def test_param_opcional_no_proporcionado_omite_validacion_de_choices(self, cfg):
+        cfg["commands"]["deploy"]["params"]["verbose"] = {
+            "required": False,
+            "choices": ["true", "false"],
+            "path": False,
+        }
+        with patch("launcher.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            rc = run_command(cfg, "deploy", ["--env", "dev", "--version", "1.0"])
+        assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# load_config — rutas de error no cubiertas
+# ---------------------------------------------------------------------------
+
+class TestLoadConfigRutasDeError:
+
+    def _ini(self, tmp_path, content):
+        from pathlib import Path
+        p = tmp_path / "test.ini"
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_mode_invalido_lanza_value_error(self, tmp_path):
+        from launcher import load_config
+        p = self._ini(tmp_path, "[cmd]\nmode = teleport\ntemplate = echo hi\n")
+        with pytest.raises(ValueError, match="mode inválido"):
+            load_config(p)
+
+    def test_exec_sin_executable_lanza_value_error(self, tmp_path):
+        from launcher import load_config
+        p = self._ini(tmp_path, "[cmd]\nmode = exec\n")
+        with pytest.raises(ValueError, match="executable"):
+            load_config(p)
+
+    def test_no_exec_sin_template_lanza_value_error(self, tmp_path):
+        from launcher import load_config
+        p = self._ini(tmp_path, "[cmd]\nmode = shell\n")
+        with pytest.raises(ValueError, match="template"):
+            load_config(p)
+
+    def test_param_con_path_true_se_carga(self, tmp_path):
+        from launcher import load_config
+        p = self._ini(
+            tmp_path,
+            "[cmd]\nmode = shell\ntemplate = echo {f}\nparams = f\nf.path = true\n",
+        )
+        cfg = load_config(p)
+        assert cfg["commands"]["cmd"]["params"]["f"]["path"] is True
