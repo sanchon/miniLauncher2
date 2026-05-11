@@ -19,6 +19,7 @@ dev   = ["pytest>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=launcher --cov-report=lcov --cov-report=term-missing"
 
 [project.scripts]
 mini-launcher = "launcher:main"

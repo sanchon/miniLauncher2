@@ -12,6 +12,10 @@ build/
 __pycache__/
 *.pyc
 
+# Cobertura de tests
+coverage.lcov
+.coverage
+
 # IDE local
 .vscode/
 
