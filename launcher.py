@@ -2,6 +2,7 @@
 import configparser
 import io
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1007,7 +1008,7 @@ def generate_omz_plugin_content(cfg: dict, launcher_argv: list[str]) -> str:
         "# Regenerar con:  mini-launcher --install-omz-plugin",
         "",
         '_mini_launcher_dir="${0:A:h}"',
-        '_mini_launcher_cmd=(python3 "${_mini_launcher_dir}/launcher.py")',
+        f'_mini_launcher_cmd=({zsh_array_items})',
         "",
         "function mini-launcher() {",
         '    "${_mini_launcher_cmd[@]}" "$@"',
@@ -1074,6 +1075,41 @@ def generate_omz_plugin_content(cfg: dict, launcher_argv: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _add_plugin_to_zshrc(zshrc_path: Path, plugin_name: str) -> int:
+    zshrc_path = zshrc_path.expanduser()
+    if not zshrc_path.exists():
+        click.echo(f"No se encontró {zshrc_path}; añade manualmente '{plugin_name}' a tu plugins=(...).", err=True)
+        return 1
+
+    text = zshrc_path.read_text(encoding="utf-8")
+    match = re.search(r'(plugins\s*=\s*\()([^)]*?)(\))', text, re.DOTALL)
+    if not match:
+        click.echo(
+            f"No se encontró 'plugins=(...)' en {zshrc_path}. Añade manualmente:\n"
+            f"  plugins=( ... {plugin_name} )",
+            err=True,
+        )
+        return 1
+
+    inner = match.group(2)
+    if plugin_name in inner.split():
+        click.echo(f"'{plugin_name}' ya estaba en plugins en {zshrc_path}")
+        return 0
+
+    if '\n' in inner:
+        last_nonempty = next((l for l in reversed(inner.splitlines()) if l.strip()), '')
+        indent = re.match(r'^(\s*)', last_nonempty).group(1) if last_nonempty else '  '
+        new_inner = inner.rstrip('\n') + f'\n{indent}{plugin_name}\n'
+    else:
+        sep = ' ' if inner.strip() else ''
+        new_inner = inner + sep + plugin_name
+
+    new_text = text[:match.start(2)] + new_inner + text[match.end(2):]
+    zshrc_path.write_text(new_text, encoding="utf-8")
+    click.echo(f"Plugin '{plugin_name}' añadido a plugins en {zshrc_path}")
+    return 0
+
+
 def install_omz_plugin(cfg: dict, launcher_argv: list[str]) -> int:
     omz_dir = Path.home() / ".oh-my-zsh" / "custom" / "plugins" / "mini-launcher"
     omz_dir.mkdir(parents=True, exist_ok=True)
@@ -1081,12 +1117,12 @@ def install_omz_plugin(cfg: dict, launcher_argv: list[str]) -> int:
     content = generate_omz_plugin_content(cfg, launcher_argv)
     plugin_file.write_text(content, encoding="utf-8")
     click.echo(f"Plugin generado en: {plugin_file}")
+
+    zshrc = Path("~/.zshrc")
+    rc = _add_plugin_to_zshrc(zshrc, "mini-launcher")
     click.echo("")
-    click.echo("Añade 'mini-launcher' a la lista plugins en ~/.zshrc:")
-    click.echo("  plugins=( ... mini-launcher )")
-    click.echo("")
-    click.echo("Luego recarga el shell:  source ~/.zshrc")
-    return 0
+    click.echo("Recarga el shell:  source ~/.zshrc")
+    return rc
 
 
 def run_interactive_shell(cfg: dict) -> int:
